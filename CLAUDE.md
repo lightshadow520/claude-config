@@ -21,7 +21,6 @@ node <scripts_dir>/vision.js "<图片路径>" "用中文描述这张图片"
 - 如果用户一次发多张图片，对每张图片依次执行 vision.js
 - 拿到所有图片的文字描述后再统一回复
 - 不要跳过识图步骤，也**不要用 Read 工具直接读取图片**
-- 需要设置环境变量 `VISION_API_KEY`（阿里云百炼 API Key）
 
 # 联网搜索
 
@@ -76,7 +75,6 @@ python <scripts_dir>/read_docx.py "<文件路径>"
 ```
 python <scripts_dir>/opju_extract.py "<文件路径>"          # 查看内容
 python <scripts_dir>/opju_extract.py "<文件路径>" --csv    # 导出 CSV
-python <scripts_dir>/opju_extract.py "<目录>" --all --csv  # 批量导出
 ```
 
 也可以直接用 `originpro` 库在 Python 代码中提取（详见 opju-extract skill）。
@@ -98,6 +96,7 @@ python <scripts_dir>/opju_extract.py "<目录>" --all --csv  # 批量导出
 
 将用户级 Claude Code 配置上传/同步到 GitHub 仓库。详见 sync-to-github skill。
 
+
 ## 触发场景
 
 - 用户说"上传配置到 GitHub"、"同步到 GitHub"、"备份 Claude 配置"
@@ -118,37 +117,37 @@ python <scripts_dir>/opju_extract.py "<目录>" --all --csv  # 批量导出
 - Commit message 说明改动内容
 - 本地 `~/.claude/` 是权威源，修改从本地同步到仓库
 
-# SCI 科学配色方案
+# SCI Color Palettes
 
-你的底层模型不具备原生配色设计能力。需要 SCI 级科学配色时，使用 sci_colors.py：
+For scientific color schemes, use sci_colors.py — pure terminal ANSI, no PNG needed:
 
 ```
-python <scripts_dir>/sci_colors.py                              # 列出全部 55 套配色
-python <scripts_dir>/sci_colors.py --search "<关键词>"            # 搜索配色
-python <scripts_dir>/sci_colors.py --show "<配色名>"              # 可视化预览
-python <scripts_dir>/sci_colors.py --code "<配色名>"              # 输出 Python 代码
-python <scripts_dir>/sci_colors.py --tag "色盲友好"               # 按标签筛选
+python <scripts_dir>/sci_colors.py                              # overview (55 palettes, grouped)
+python <scripts_dir>/sci_colors.py --show "<name>"              # detail: large blocks + hex
+python <scripts_dir>/sci_colors.py --search "<keyword>"         # search by keyword
+python <scripts_dir>/sci_colors.py --code "<name>"              # copy-paste Python snippet
+python <scripts_dir>/sci_colors.py --tag "<tag>"                # filter by tag
 ```
 
-详见 sci-color skill。
+See sci-color skill for detailed guidance. Show terminal output directly — never generate PNG files for color preview.
 
-## 触发场景
+## Trigger
 
-- 用户问"配色""颜色方案""sci 配色""好看的颜色"
-- 用户要做科研图表需要配色建议
-- 用户说画图不好看、颜色不会搭配
-- 用户需要色盲友好/打印安全/顶刊风格的配色
+- User asks about colors, palettes, color schemes, chart aesthetics
+- User says "配色", "颜色", "sci颜色", "好看的配色"
+- User needs colorblind-safe / print-friendly / journal-grade colors
 
-## 常用推荐
+## Quick Ref
 
-| 场景 | 推荐配色 |
-|------|---------|
-| 3-5 类分类图 | Nature Classic 5 / Science Colorblind 6 |
-| 热图/连续变量 | Viridis 5 / Cool-Warm 5 |
-| 色盲友好首选 | Okabe-Ito 7 / Tol Muted 9 |
-| 单细胞/多组学 | Nature 2020 COVID 12 / Cell 2019 scRNA 8 |
-| 中文期刊 | China Sci 5 / Earth Tone 6 |
-| 大面积浅色填充 | Pastel Dream 6 / Morandi 6 |
+| Scenario | Palette |
+|----------|---------|
+| 3-5 categories | Nature Classic 5 / Science Colorblind 6 |
+| Heatmap / sequential | Viridis 5 / Cool-Warm 5 |
+| Colorblind-safe (gold std) | Okabe-Ito 7 / Tol Muted 9 |
+| Single-cell / multi-omics | Nature 2020 COVID 12 / Cell 2019 scRNA 8 |
+| Soft / elegant / artsy | Morandi 6 / French Gray 6 |
+| Dark bg (PPT/poster) | Neon DarkBg 5 |
+| Semantic (good/warn/bad) | Traffic Light 3 |
 
 # 高危操作审批
 
