@@ -8,6 +8,7 @@
 |------|------|
 | `CLAUDE.md` | 用户级指令（识图、联网搜索、Word/OPJU 文档、高危审批） |
 | `skills/opju-extract/` | Origin OPJU 数据提取技能 |
+| `skills/sync-to-github/` | GitHub 配置同步/备份技能（含隐私保护） |
 | `scripts/vision.js` | 千问 VL 识图（需自行提供 API Key） |
 | `scripts/websearch.py` | DuckDuckGo 联网搜索（免费，无需 Key） |
 | `scripts/read_docx.py` | Word 文档读取 |

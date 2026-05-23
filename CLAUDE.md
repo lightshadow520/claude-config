@@ -94,6 +94,30 @@ python <scripts_dir>/opju_extract.py "<目录>" --all --csv  # 批量导出
 - 提取的 CSV 使用 UTF-8 BOM 编码，Excel 可直接打开
 - 图表 (GPage) 不包含表格数据，只导出 Workbook 中的 Worksheet
 
+# GitHub 配置同步
+
+将用户级 Claude Code 配置上传/同步到 GitHub 仓库。详见 sync-to-github skill。
+
+## 触发场景
+
+- 用户说"上传配置到 GitHub"、"同步到 GitHub"、"备份 Claude 配置"
+- 用户要求更新/发布新版本的配置仓库
+- 用户要求分享用户级能力给其他人
+
+## 隐私保护（强制）
+
+上传前**必须**检查并处理：
+
+1. **API Key**：扫描所有文件的 `sk-` 模式，`settings.json` 中的 token 替换为占位符
+2. **绝对路径**：仓库 CLAUDE.md 用 `<scripts_dir>` 占位，本地 CLAUDE.md 保留真实路径
+3. **个人邮箱/用户名**：README 中的 Git 配置信息脱敏
+
+## 版本管理
+
+- 每次更新后打 tag：`v1.0.0` → `v1.0.1` → ...
+- Commit message 说明改动内容
+- 本地 `~/.claude/` 是权威源，修改从本地同步到仓库
+
 # 高危操作审批
 
 以下操作**必须先暂停并询问用户意见**，得到明确同意后才能执行：
