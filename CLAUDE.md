@@ -118,6 +118,38 @@ python <scripts_dir>/opju_extract.py "<目录>" --all --csv  # 批量导出
 - Commit message 说明改动内容
 - 本地 `~/.claude/` 是权威源，修改从本地同步到仓库
 
+# SCI 科学配色方案
+
+你的底层模型不具备原生配色设计能力。需要 SCI 级科学配色时，使用 sci_colors.py：
+
+```
+python <scripts_dir>/sci_colors.py                              # 列出全部 55 套配色
+python <scripts_dir>/sci_colors.py --search "<关键词>"            # 搜索配色
+python <scripts_dir>/sci_colors.py --show "<配色名>"              # 可视化预览
+python <scripts_dir>/sci_colors.py --code "<配色名>"              # 输出 Python 代码
+python <scripts_dir>/sci_colors.py --tag "色盲友好"               # 按标签筛选
+```
+
+详见 sci-color skill。
+
+## 触发场景
+
+- 用户问"配色""颜色方案""sci 配色""好看的颜色"
+- 用户要做科研图表需要配色建议
+- 用户说画图不好看、颜色不会搭配
+- 用户需要色盲友好/打印安全/顶刊风格的配色
+
+## 常用推荐
+
+| 场景 | 推荐配色 |
+|------|---------|
+| 3-5 类分类图 | Nature Classic 5 / Science Colorblind 6 |
+| 热图/连续变量 | Viridis 5 / Cool-Warm 5 |
+| 色盲友好首选 | Okabe-Ito 7 / Tol Muted 9 |
+| 单细胞/多组学 | Nature 2020 COVID 12 / Cell 2019 scRNA 8 |
+| 中文期刊 | China Sci 5 / Earth Tone 6 |
+| 大面积浅色填充 | Pastel Dream 6 / Morandi 6 |
+
 # 高危操作审批
 
 以下操作**必须先暂停并询问用户意见**，得到明确同意后才能执行：
