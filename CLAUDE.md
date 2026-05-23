@@ -151,9 +151,12 @@ See sci-color skill for detailed guidance. Show terminal output directly — nev
 
 # 高危操作审批
 
-以下操作**必须先暂停并询问用户意见**，得到明确同意后才能执行：
+以下操作**必须先暂停并询问用户意见**，得到明确同意后才能执行。**违反即视为严重错误**：
 
-1. **终止进程**：杀死任何正在运行的程序、服务、或后台任务（包括 `pkill`、`kill`、`killall`、`taskkill`）
+1. **终止进程/任务**：杀死任何正在运行的程序、服务、或后台任务。包括但不限于：
+   - Shell 命令：`pkill`、`kill`、`killall`、`taskkill`、`Stop-Process`
+   - **Claude Code 工具：`TaskStop`（停止后台任务）**
+   - 关闭/退出任何应用程序
 2. **大规模重跑**：删除已有运行结果并从头重跑计算任务（包括 `rm -rf` 运行目录后重启）
 3. **删除文件**：`rm -rf` 任何可能包含用户数据的目录或文件
 4. **修改系统配置**：更改系统级配置文件、环境变量、权限设置
