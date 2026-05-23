@@ -1,0 +1,109 @@
+# 识图能力
+
+你的底层模型不具备原生识图能力。遇到图片时，**不要用 Read 工具看图片**，改用 vision.js：
+
+```
+node <scripts_dir>/vision.js "<图片路径>" "用中文描述这张图片"
+```
+
+## 触发场景
+
+- 用户分享图片路径（本地或网络 URL）
+- 消息中出现 "Saved attachments:" 并列出图片
+- 用户要求分析、描述、识别图片内容
+- **重要**：对于网络图片 URL，使用 `--url` 参数：
+  ```
+  node <scripts_dir>/vision.js --url "<图片URL>" "用中文描述这张图片"
+  ```
+
+## 注意事项
+
+- 如果用户一次发多张图片，对每张图片依次执行 vision.js
+- 拿到所有图片的文字描述后再统一回复
+- 不要跳过识图步骤，也**不要用 Read 工具直接读取图片**
+- 需要设置环境变量 `VISION_API_KEY`（阿里云百炼 API Key）
+
+# 联网搜索
+
+你的底层模型不具备原生联网能力。需要联网搜索时，使用 websearch.py：
+
+```
+python <scripts_dir>/websearch.py "<搜索关键词>" --count N
+```
+
+- `--count N` 控制返回结果数，默认 10
+- `--json` 输出 JSON 格式
+
+## 触发场景
+
+- 用户问当前事件、最新资讯、新闻
+- 用户说"搜索""联网""查一下""搜一下"
+- 用户要求的信息超出你的知识截止日期
+- 你需要确认某个信息是否仍然准确
+- 用户问最新版本的库/工具文档
+
+## 注意事项
+
+- 优先用用户提问的语言搜索；技术问题可中英文各搜一次
+- 多个独立子问题时并行搜索
+- 回复时引用来源 URL
+- 结果质量差时换个说法重新搜索
+
+# Word 文档阅读
+
+你的底层模型不具备原生阅读 Word 文档的能力。遇到 `.docx` 文件时，**不要用 Read 工具直接读取**，改用 read_docx.py：
+
+```
+python <scripts_dir>/read_docx.py "<文件路径>"
+```
+
+## 触发场景
+
+- 用户分享 .docx 文件路径
+- 用户要求读取、分析、总结 Word 文档内容
+- 消息中出现 "Saved attachments:" 并列出 .docx 文件
+
+## 注意事项
+
+- 脚本提取所有段落和表格文本（保留标题层级）
+- 不支持旧版 `.doc` 格式；如遇 .doc 文件，提示用户先用 LibreOffice 转为 .docx
+- 提取到的文本较长时，先理解全文再回应用户
+
+# Origin OPJU 数据提取
+
+你的底层模型不具备原生读取 Origin `.opju` 文件的能力。遇到 `.opju` 文件时，**不要用 Read 工具直接读取**，改用 opju_extract.py：
+
+```
+python <scripts_dir>/opju_extract.py "<文件路径>"          # 查看内容
+python <scripts_dir>/opju_extract.py "<文件路径>" --csv    # 导出 CSV
+python <scripts_dir>/opju_extract.py "<目录>" --all --csv  # 批量导出
+```
+
+也可以直接用 `originpro` 库在 Python 代码中提取（详见 opju-extract skill）。
+
+## 触发场景
+
+- 用户分享 .opju 文件路径
+- 用户要求提取、读取 Origin 项目数据
+- 用户提到 "opju"、"Origin 数据提取"、"Origin 工作表导出"
+
+## 注意事项
+
+- 需要电脑上安装了 Origin/OriginPro 软件
+- 需要 `pip install originpro pandas`（originpro 通过 COM 接口与 Origin 通信）
+- 提取的 CSV 使用 UTF-8 BOM 编码，Excel 可直接打开
+- 图表 (GPage) 不包含表格数据，只导出 Workbook 中的 Worksheet
+
+# 高危操作审批
+
+以下操作**必须先暂停并询问用户意见**，得到明确同意后才能执行：
+
+1. **终止进程**：杀死任何正在运行的程序、服务、或后台任务（包括 `pkill`、`kill`、`killall`、`taskkill`）
+2. **大规模重跑**：删除已有运行结果并从头重跑计算任务（包括 `rm -rf` 运行目录后重启）
+3. **删除文件**：`rm -rf` 任何可能包含用户数据的目录或文件
+4. **修改系统配置**：更改系统级配置文件、环境变量、权限设置
+
+在询问用户时，必须：
+- 说明当前状态（已完成了什么、有什么数据）
+- 说明你提议的操作及其后果（会丢失什么）
+- 给出保留现有数据的替代方案

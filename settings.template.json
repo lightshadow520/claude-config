@@ -1,0 +1,28 @@
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "https://api.deepseek.com/anthropic",
+    "ANTHROPIC_AUTH_TOKEN": "your-deepseek-api-key-here",
+    "ANTHROPIC_MODEL": "DeepSeek-v4-pro[1m]",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "DeepSeek-v4-pro[1m]",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "DeepSeek-v4-pro[1m]",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "DeepSeek-v4-pro[1m]"
+  },
+  "permissions": {
+    "defaultMode": "auto"
+  },
+  "extraKnownMarketplaces": {
+    "karpathy-skills": {
+      "source": {
+        "source": "github",
+        "repo": "forrestchang/andrej-karpathy-skills"
+      }
+    }
+  },
+  "autoUpdatesChannel": "latest",
+  "skipDangerousModePermissionPrompt": true,
+  "theme": "dark-ansi",
+  "skipAutoPermissionPrompt": true,
+  "enabledPlugins": {
+    "andrej-karpathy-skills@karpathy-skills": true
+  }
+}
