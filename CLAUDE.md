@@ -149,6 +149,39 @@ See sci-color skill for detailed guidance. Show terminal output directly — nev
 | Dark bg (PPT/poster) | Neon DarkBg 5 |
 | Semantic (good/warn/bad) | Traffic Light 3 |
 
+# /workflow 多代理工作流
+
+`CLAUDE_CODE_WORKFLOWS=1` 已启用。Workflow 是 JS 脚本驱动的确定性多代理编排工具。
+
+## 主动建议（Proactive Suggestion）
+
+遇到以下场景时，**主动提醒用户**可以考虑使用 /workflow，并**自行帮用户编写 .js 工作流脚本**（用户不会写也不应需要写）：
+
+### 触发场景
+
+- **批量处理**：多个文件/数据集需要相同操作（如批量提取 opju、批量画图）
+- **多步骤流水线**：提取→分析→画图→出报告，步骤之间有明确依赖
+- **并行独立任务**：同时 review 多个文件、同时分析多个系统
+- **重复性工作**：用户以前做过的类似任务再次出现
+- **需要确定性**：用户说"每次结果都不太一样"时
+
+### 提醒方式
+
+在判断可以用 workflow 加速时，简洁地提一句：
+
+> "这个任务可以并行跑，要不我写个 workflow .js 脚本？8 个文件 30 秒就处理完了。"
+
+提供两个选项：
+1. **自动写脚本**：Claude 直接写好 .js，用户只需确认后运行 `/workflow xxx.js`
+2. **传统方式**：继续在主会话里顺序执行
+
+### 脚本编写规则
+
+- 用户不会创建 .js 文件，Claude 负责写完整脚本
+- 脚本放项目根目录或 `.claude/workflows/` 下
+- 每个 `agent()` 任务描述要具体（指定工具、文件路径、预期输出）
+- 加上验证步骤（agent 跑完检查结果完整性）
+
 # 高危操作审批
 
 以下操作**必须先暂停并询问用户意见**，得到明确同意后才能执行。**违反即视为严重错误**：
