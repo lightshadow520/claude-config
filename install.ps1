@@ -6,35 +6,43 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ClaudeDir = "$env:USERPROFILE\.claude"
 $ScriptsDir = "$ClaudeDir\scripts"
 $SkillsDir = "$ClaudeDir\skills"
+$CompChemDir = "$ClaudeDir\comp-chem"
 
 Write-Host "=== Claude Code 配置安装 ===" -ForegroundColor Cyan
 Write-Host ""
 
 # 1. Create directories
-Write-Host "[1/5] 创建目录..." -ForegroundColor Yellow
+Write-Host "[1/6] 创建目录..." -ForegroundColor Yellow
 New-Item -ItemType Directory -Force -Path $ScriptsDir | Out-Null
 New-Item -ItemType Directory -Force -Path $SkillsDir | Out-Null
+New-Item -ItemType Directory -Force -Path $CompChemDir | Out-Null
 
 # 2. Copy scripts
-Write-Host "[2/5] 复制脚本到 $ScriptsDir ..." -ForegroundColor Yellow
+Write-Host "[2/6] 复制脚本到 $ScriptsDir ..." -ForegroundColor Yellow
 Copy-Item -Force "$ScriptDir\scripts\*" $ScriptsDir\
 
 # 3. Copy skills
-Write-Host "[3/5] 复制技能到 $SkillsDir ..." -ForegroundColor Yellow
+Write-Host "[3/6] 复制技能到 $SkillsDir ..." -ForegroundColor Yellow
 Copy-Item -Force -Recurse "$ScriptDir\skills\*" $SkillsDir\
 
-# 4. Handle CLAUDE.md
-Write-Host "[4/5] 设置 CLAUDE.md ..." -ForegroundColor Yellow
+# 4. Copy comp-chem domain files
+Write-Host "[4/6] 复制领域文件到 $CompChemDir ..." -ForegroundColor Yellow
+Copy-Item -Force "$ScriptDir\comp-chem\*" $CompChemDir\
+
+# 5. Handle CLAUDE.md
+Write-Host "[5/6] 设置 CLAUDE.md ..." -ForegroundColor Yellow
 $TemplateClaude = "$ScriptDir\CLAUDE.md"
 $UserClaude = "$ClaudeDir\CLAUDE.md"
+$ClaudeDirUnix = $ClaudeDir.Replace('\', '/')
 
 if (Test-Path $UserClaude) {
     Write-Host "  已存在 $UserClaude，合并内容..." -ForegroundColor Gray
     # Append new content after existing, with separator
     $existing = Get-Content $UserClaude -Raw -Encoding UTF8
     $newContent = Get-Content $TemplateClaude -Raw -Encoding UTF8
-    # Replace placeholder paths with actual scripts dir
+    # Replace placeholder paths with actual dirs
     $newContent = $newContent -replace '<scripts_dir>', $ScriptsDir.Replace('\', '/')
+    $newContent = $newContent -replace '<config_dir>', $ClaudeDirUnix
     if ($existing -notmatch "opju_extract") {
         Add-Content $UserClaude "`n`n---`n`n"
         Add-Content $UserClaude $newContent
@@ -45,12 +53,13 @@ if (Test-Path $UserClaude) {
 } else {
     $newContent = Get-Content $TemplateClaude -Raw -Encoding UTF8
     $newContent = $newContent -replace '<scripts_dir>', $ScriptsDir.Replace('\', '/')
+    $newContent = $newContent -replace '<config_dir>', $ClaudeDirUnix
     $newContent | Out-File $UserClaude -Encoding UTF8
     Write-Host "  已创建 $UserClaude" -ForegroundColor Green
 }
 
-# 5. Install Python dependencies
-Write-Host "[5/5] 安装 Python 依赖..." -ForegroundColor Yellow
+# 6. Install Python dependencies
+Write-Host "[6/6] 安装 Python 依赖..." -ForegroundColor Yellow
 $packages = @("ddgs", "python-docx", "pandas")
 foreach ($pkg in $packages) {
     Write-Host "  pip install $pkg ..." -ForegroundColor Gray

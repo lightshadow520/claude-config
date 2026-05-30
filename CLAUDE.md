@@ -96,6 +96,7 @@ python <scripts_dir>/opju_extract.py "<文件路径>" --csv    # 导出 CSV
 
 将用户级 Claude Code 配置上传/同步到 GitHub 仓库。详见 sync-to-github skill。
 
+**仓库**: `lightshadow520/claude-config` (https://github.com/lightshadow520/claude-config)
 
 ## 触发场景
 
@@ -181,6 +182,41 @@ See sci-color skill for detailed guidance. Show terminal output directly — nev
 - 脚本放项目根目录或 `.claude/workflows/` 下
 - 每个 `agent()` 任务描述要具体（指定工具、文件路径、预期输出）
 - 加上验证步骤（agent 跑完检查结果完整性）
+
+# 计算化学与 HPC（条件加载）
+
+下面两个领域文件按需加载，避免每次对话都占 token。
+**触发规则：对话命中相应关键词后，必须先用 Read 工具加载对应文件，再执行任何操作。**
+
+## 域 1：服务器 & HPC 操作
+
+**触发词**（命中任一即加载）：
+SSH、远程服务器、host、mpirun、vasp_std、cp2k、lammps、gaussian、orca、
+nohup、提交计算、查看进程、kill 进程、服务器进程、hpc_job、hpc_watcher、
+remote_ps、连接超时、服务器负载、queue、作业调度
+
+→ **加载** `<config_dir>/comp-chem/hpc.md`
+
+## 域 2：计算报错 & 诊断
+
+**触发词**（命中任一即加载）：
+报错、失败、不收敛、收敛了吗、OOM、内存不足、死锁、deadlock、segfault、
+FEWALD、SCF、几何优化、还要多久、什么时候跑完、预估时间、进度如何、
+log、OUTCAR、OSZICAR、输出文件、check_calc、error_type、排错、诊断、诊断
+
+→ **加载** `<config_dir>/comp-chem/diagnostics.md`
+
+## 域 3：深层排查（在域 2 不够用时）
+
+→ **加载** `<config_dir>/comp-chem-sop.md`
+
+## 不触发加载的话题
+
+以下话题不需要加载上述文件，正常回答即可：
+- 理论方法选择建议（用什么泛函、基组）
+- 计算化学行业讨论
+- 代算业务相关
+- 数据存储、SOP 管理
 
 # 高危操作审批
 

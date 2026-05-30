@@ -8,25 +8,31 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CLAUDE_DIR="$HOME/.claude"
 SCRIPTS_DIR="$CLAUDE_DIR/scripts"
 SKILLS_DIR="$CLAUDE_DIR/skills"
+COMPCHEM_DIR="$CLAUDE_DIR/comp-chem"
 
 echo -e "\033[36m=== Claude Code 配置安装 ===\033[0m"
 echo ""
 
 # 1. Create directories
-echo -e "\033[33m[1/5] 创建目录...\033[0m"
+echo -e "\033[33m[1/6] 创建目录...\033[0m"
 mkdir -p "$SCRIPTS_DIR"
 mkdir -p "$SKILLS_DIR"
+mkdir -p "$COMPCHEM_DIR"
 
 # 2. Copy scripts
-echo -e "\033[33m[2/5] 复制脚本到 $SCRIPTS_DIR ...\033[0m"
+echo -e "\033[33m[2/6] 复制脚本到 $SCRIPTS_DIR ...\033[0m"
 cp -f "$SCRIPT_DIR/scripts/"* "$SCRIPTS_DIR/"
 
 # 3. Copy skills
-echo -e "\033[33m[3/5] 复制技能到 $SKILLS_DIR ...\033[0m"
+echo -e "\033[33m[3/6] 复制技能到 $SKILLS_DIR ...\033[0m"
 cp -rf "$SCRIPT_DIR/skills/"* "$SKILLS_DIR/"
 
-# 4. Handle CLAUDE.md
-echo -e "\033[33m[4/5] 设置 CLAUDE.md ...\033[0m"
+# 4. Copy comp-chem domain files
+echo -e "\033[33m[4/6] 复制领域文件到 $COMPCHEM_DIR ...\033[0m"
+cp -f "$SCRIPT_DIR/comp-chem/"* "$COMPCHEM_DIR/"
+
+# 5. Handle CLAUDE.md
+echo -e "\033[33m[5/6] 设置 CLAUDE.md ...\033[0m"
 TEMPLATE_CLAUDE="$SCRIPT_DIR/CLAUDE.md"
 USER_CLAUDE="$CLAUDE_DIR/CLAUDE.md"
 
@@ -36,18 +42,18 @@ if [ -f "$USER_CLAUDE" ]; then
         echo "" >> "$USER_CLAUDE"
         echo "---" >> "$USER_CLAUDE"
         echo "" >> "$USER_CLAUDE"
-        sed "s|<scripts_dir>|$SCRIPTS_DIR|g" "$TEMPLATE_CLAUDE" >> "$USER_CLAUDE"
-        echo "  已追加新内容" -e "\033[32m"
+        sed -e "s|<scripts_dir>|$SCRIPTS_DIR|g" -e "s|<config_dir>|$CLAUDE_DIR|g" "$TEMPLATE_CLAUDE" >> "$USER_CLAUDE"
+        echo -e "\033[32m  已追加新内容\033[0m"
     else
         echo "  OPJU 相关规则已存在，跳过"
     fi
 else
-    sed "s|<scripts_dir>|$SCRIPTS_DIR|g" "$TEMPLATE_CLAUDE" > "$USER_CLAUDE"
+    sed -e "s|<scripts_dir>|$SCRIPTS_DIR|g" -e "s|<config_dir>|$CLAUDE_DIR|g" "$TEMPLATE_CLAUDE" > "$USER_CLAUDE"
     echo -e "\033[32m  已创建 $USER_CLAUDE\033[0m"
 fi
 
-# 5. Install Python dependencies
-echo -e "\033[33m[5/5] 安装 Python 依赖...\033[0m"
+# 6. Install Python dependencies
+echo -e "\033[33m[6/6] 安装 Python 依赖...\033[0m"
 pip install ddgs python-docx pandas 2>/dev/null || echo -e "\033[31m  部分包安装失败，请手动执行: pip install ddgs python-docx pandas\033[0m"
 
 echo ""
