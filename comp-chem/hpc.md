@@ -161,3 +161,135 @@ python <scripts_dir>/hpc_job.py kill --host <host> --dir /path --confirm
    c. 修改输入文件
    d. 用 hpc_job.py submit 重新提交
 ```
+
+---
+
+# 五大可靠性策略 — HPC 实施细则
+
+## S1: Schema-Gated Execution
+
+### Pre-flight Check Gate（提交前必检）
+
+hpc_job.py submit 之前，必须对以下逐项检查，**全部通过才能提交**：
+
+| 检查项 | VASP | CP2K | LAMMPS | Gaussian | ORCA |
+|--------|------|------|--------|----------|------|
+| 输入文件存在 | INCAR POSCAR POTCAR KPOINTS | .inp | in.* data.* | .gjf/.com | .inp |
+| 原子重叠 | POSCAR 中任意原子对 >0.5Å | 同左 | 同左 | 同左 | 同左 |
+| 参数合法性 | ENCUT≥200, EDIFF>0 | CUTOFF≥200 | timestep≤0.005 | %Mem≤90 | %maxcore>0 |
+| 磁盘空间 | df -h 工作目录 ≥10GB | 同左 | 同左 | 同左 | 同左 |
+| 核心数合理 | -np ≤ 服务器物理核心数 | 同左 | 同左 | %NProcShared | PAL≥1 |
+| 无同名任务冲突 | remote_ps.py 检查无同名进程 | 同左 | 同左 | 同左 | 同左 |
+
+**操作规则**：
+1. 检查不通过 → 报告具体哪项失败 + 建议修改值 → 等用户确认 → 修改后再提交
+2. 检查通过 → 直接提交，告知用户 pre-flight 已通过
+3. **禁止跳过 pre-flight** 以"赶时间""应该没问题"为理由
+
+### 修改门控
+
+任何对远程服务器输入文件的修改：
+1. 先用 scp 下载原文件到本地临时目录
+2. 修改后用 diff 展示新旧差异（必须用 `diff -u` 格式）
+3. 逐条说明每项修改的原因
+4. 用户确认后再上传
+
+## S2: Generator ≠ Reviewer
+
+### HPC 操作中的实现
+
+| 操作 | Generator（谁做） | Reviewer（谁审） |
+|------|-------------------|-------------------|
+| 生成 INCAR/KPOINTS | 主 Agent | 独立重读 POSCAR 后复核 K 点密度、ENCUT 合理性 |
+| 写提交脚本 | 主 Agent | 检查 mpirun 参数、环境变量、路径是否正确 |
+| 分析报错原因 | 主 Agent | 独立调用 check_calc.py 交叉验证诊断结论 |
+| 修改输入参数 | 主 Agent | 逐项列出 old→new + reason，用户确认 |
+
+### VERDICT 格式
+
+每次审查末尾必须输出：
+```
+VERDICT: PASS — [通过原因]
+VERDICT: FAIL — [失败原因] → [修复建议]
+```
+
+## S3: Context Engineering
+
+### HPC 操作中的实现
+
+1. **状态不靠记忆靠文件**：服务器状态永远从以下文件读取，不凭对话记忆：
+   - `.hpc_status.json` — 计算任务状态
+   - `remote_ps.py --json` — 进程清单
+   - `check_calc.py --json` — 计算结果
+
+2. **SSH 输出不上屏**：SSH 到服务器的任何裸输出（ps aux、cat log、ls）**禁止**直接粘贴到对话。必须：
+   - 先下载到本地文件
+   - 用解析器处理
+   - 只报告解析结论
+
+3. **日志片段策略**：需要展示日志时，仅展示与当前问题相关的关键行（≤50 行），前后用 `[...]` 标注省略。禁止全文粘贴。
+
+4. **子代理隔离**：
+   - 下载输出文件分析 → 独立 subagent
+   - 修改输入文件 → 独立 subagent
+   - 主 Agent 只看各 subagent 的 conclusion，不看完整过程
+
+## S4: CodeAgents
+
+### 结构化通信格式
+
+所有 HPC 操作的参数修改和状态报告使用以下格式：
+
+**参数修改报告**：
+```json
+{
+  "file": "INCAR",
+  "changes": [
+    {"param": "ENCUT", "old": 400, "new": 350, "reason": "OOM: reduce memory by ~15%"},
+    {"param": "ALGO", "old": "Normal", "new": "VeryFast", "reason": "Memory optimization for relaxation"}
+  ],
+  "expected_effect": "Memory reduction ~30%, speed +20%, accuracy change <1meV/atom"
+}
+```
+
+**任务状态报告**：
+```json
+{
+  "job_id": "Ni-111_12345_1717000000",
+  "status": "running",
+  "elapsed": "3h 25m",
+  "output_size_mb": 234,
+  "last_activity": "120s ago",
+  "scf_cycles_completed": 15,
+  "estimated_remaining": "~6h",
+  "alerts": []
+}
+```
+
+**提交命令构建**：每次 submit 必须显式列出所有参数，不用默认值隐式假设：
+```
+hpc_job.py submit \
+  --host node01 --port 22 --user polestar \
+  --code vasp --dir /home/polestar/calc/Ni-111 \
+  --cmd "mpirun -np 32 vasp_std" \
+  --heartbeat 900 --walltime 86400 --cores 32
+```
+
+## S5: Cognitive Firewalls
+
+### HPC 专用防火墙
+
+| 防火墙 | 触发条件 | HPC 场景动作 |
+|--------|---------|-------------|
+| **Hallucination Guard** | 打算建议修改 INCAR 标签值 | 先用 `grep` 确认该标签在 INCAR 中存在；建议的修改值必须在 VASP wiki/手册中有依据 |
+| **Path Existence** | 引用服务器上的任何文件路径 | 先用 `test -f` 或 `ls` 通过 SSH 确认文件存在 |
+| **PID Reality** | 说"PID 12345 的进程" | PID 必须来自 `remote_ps.py --json` 或 `.hpc_status.json`，不能来自记忆 |
+| **Sunk-Cost Guardian** | 同一计算连续提交失败 ≥3 次 | 停。列出已尝试的修改 + 每次的报错。建议用户检查输入文件是否从根本上就有问题。禁止继续重试 |
+| **Premature Closure** | 说"跑完了""修好了" | 检查：1) hpc_status.json 确认 status=completed 2) check_calc.py 确认结果合理 3) 是否正常结束（非 OOM/timeout） |
+| **Command Injection** | 用户给的路径/参数包含 `;` `\|` `` ` `` `$()` 等 | 拒绝执行，询问用户意图 |
+
+### 防火墙优先级
+
+1. Command Injection > Hallucination Guard > Path Existence（安全第一）
+2. Sunk-Cost Guardian > Premature Closure（防浪费 > 防遗漏）
+3. 任何防火墙触发 → 先报告再等待，禁止越过
