@@ -4,7 +4,28 @@
 
 ---
 
-# SSH 连接诊断规则
+# SSH 连接方式（强制规则）
+
+## 优先使用 paramiko，禁止依赖 sshpass
+
+`sshpass` 在不同平台（WinGet/apt/brew）行为不一致，密码传递经常失败。**默认使用 Python paramiko 库连接远程服务器**：
+
+```python
+import paramiko
+c = paramiko.SSHClient()
+c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+c.connect(host, port=port, username=user, password=pw, timeout=15)
+stdin, stdout, stderr = c.exec_command('command')
+```
+
+paramiko 是纯 Python 实现，不依赖系统 SSH 或 sshpass，跨平台一致。已在多台 AutoDL/GPUshare 服务器验证通过。
+
+**只有在 paramiko 也失败时才尝试 sshpass**：
+```
+sshpass -p 'password' ssh -o StrictHostKeyChecking=no -o ConnectTimeout=15 user@host -p port 'command'
+```
+
+**严禁**：用 `echo password | ssh` 管道方式传密码（ssh 不支持 stdin 密码输入）。
 
 ## 连接超时 ≠ 服务器挂了
 
@@ -293,3 +314,76 @@ hpc_job.py submit \
 1. Command Injection > Hallucination Guard > Path Existence（安全第一）
 2. Sunk-Cost Guardian > Premature Closure（防浪费 > 防遗漏）
 3. 任何防火墙触发 → 先报告再等待，禁止越过
+
+## S6: Success Capture（成功经验捕获）
+
+### 触发条件
+
+同一计算任务/同一类错误连续失败 **≥3 次**后，某方案**真正成功**（不是巧合通过，而是后续同类操作完全绕开了该坑）。
+
+### "真正成功"的判定标准
+
+| 假成功（不触发捕获） | 真成功（触发捕获） |
+|---------------------|-------------------|
+| 换了台服务器跑通了，但不知道原因 | 定位到是某 MPI 版本 bug，换版本后所有服务器都能跑 |
+| 随机调参后某次过了 | 找到参数阈值（如 ENCUT<350 必 OOM），之后每次都避开 |
+| 杀进程重跑后暂时好了 | 修了根因（如修了 ulimit、加了环境变量），之后不再复现 |
+| 只跑通了一次，复现不了 | 方案可复现：同样的修改在同类计算上都有效 |
+
+### 捕获工作流
+
+```
+同一问题失败 ≥3 次 → Sunk-Cost Guardian 触发 → 停止重试
+  │
+  ├─ 分析根因 + 找到方案 → 验证成功（真成功）
+  │
+  ├─ Step 1: 搜索现有规则文件
+  │    grep -rl "<关键词>" comp-chem/ memory/
+  │    找是否已有相关 md
+  │
+  ├─ Step 2: 判断归属
+  │    ├─ 有匹配文件 → 报告："comp-chem/xxx.md 第 N 行有相关规则，建议追加"
+  │    └─ 无匹配文件 → 报告："没有相关规则文件，建议新建 comp-chem/<topic>.md"
+  │
+  ├─ Step 3: 询问用户 → 等确认
+  │
+  └─ Step 4: 写入，格式如下：
+```
+
+### 写入模板
+
+```markdown
+## 问题：[一句话描述]
+
+**识别特征**：[以后遇到什么症状就想到这条规则]
+
+**失败历史**：
+| 第 N 次 | 尝试方案 | 失败表现 | 学到什么 |
+|---------|---------|---------|---------|
+| 1 | [方案] | [错误] | [教训] |
+| 2 | [方案] | [错误] | [教训] |
+| 3 | [方案] | [错误] | [教训] |
+
+**成功方案**：[具体步骤，可复现]
+
+**为什么这次能绕开**：[根因分析]
+
+**适用范围**：[哪些代码/场景适用，哪些不适用]
+```
+
+### 文件放置规则
+
+| 问题范围 | 写入位置 |
+|---------|---------|
+| 仅涉及某个代码的参数调优 | `comp-chem/diagnostics.md` 对应代码段落 |
+| 涉及 HPC/服务器/SSH 操作 | `comp-chem/hpc.md` 对应策略段落 |
+| 跨代码的通用坑（如 MPI 版本） | `comp-chem/hpc.md` 环境初始化段落后 |
+| 全新的独立主题 | 新建 `comp-chem/<topic>.md` + 在 CLAUDE.md 加触发词 |
+| 与计算无关的经验 | `memory/<topic>.md` + 更新 MEMORY.md 索引 |
+
+### 禁止行为
+
+- **禁止** 成功后默默继续，不询问是否记录
+- **禁止** 把假成功当真成功写入规则
+- **禁止** 写入未经验证复现的方案
+- **禁止** 把规则写在根 CLAUDE.md（根级只放触发条件）
