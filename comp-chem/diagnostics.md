@@ -263,7 +263,87 @@ Level 5：磁矩专项
 - 确认势函数文件路径正确
 - 重新编译带有 debug flag
 
-### Gaussian
+### Materials Studio (CASTEP / DMol3 / Forcite)
+
+MS 是 BIOVIA 商业闭源软件，开源社区自动化工具极少。**没有 Custodian 或 AiiDA 级别的自动恢复框架。**
+已有的 MS 解析器 `check_calc.py` (materials_studio parser) 覆盖基本输出解析。
+
+**模块与运行方式**：
+
+| 模块 | 输入文件 | 服务器启动命令 |
+|------|---------|---------------|
+| CASTEP | `*.cell` + `*.param` | `RunCASTEP.sh -np N inputname` |
+| DMol3 | `*.car` + `*.input` | `RunDMol3.sh -np N inputname` |
+| Forcite/Mesocite | `*.xsd` + Perl 脚本 | `RunMatScript.sh script.pl` |
+
+**自动化方式**：GUI → "Copy Script" 生成 Perl 脚本 → 传脚本+结构到服务器 → `RunMatScript.sh` 执行。MS 2026 新增 Python 脚本支持。
+
+**CASTEP SCF 不收敛 → 四级救援协议**（来源：MS 官方文档 + 计算化学公社 + 知乎）
+
+```
+Layer 1：基础参数（解决 90% 问题）
+  取消 Fix Occupancy（金属体系头号杀手）
+  Density Mixing → Charge 从 0.5 降至 0.1-0.2
+  Max SCF cycles 100 → 200-500
+  Smearing 0.1 → 0.2-0.5 eV
+  Empty bands +20-30%
+
+Layer 2：Density Mixing 深度调参
+  mix_charge_amp 0.5 → 0.1（电荷密度混合振幅）
+  mix_spin_amp 0.5 → 0.2（自旋密度混合，磁性体系关键）
+  mix_energy_cutoff 增大到 Energy Cutoff ×3-4
+  mix_history_length 增大到 10-20
+  启用 Preconditioner
+
+Layer 3：切换电子最小化方法
+  Density Mixing → All Bands/EDFT
+  收敛性大幅提升，但计算时间 ×3 以上
+  适用于：孤立分子（超胞中的分子）、Density Mixing 反复失败
+
+Layer 4：物理参数排查
+  过渡金属/稀土 → 手动设置初始磁矩 + DFT+U
+  亚铁磁体系（尖晶石等）→ 不同原子自旋方向（↑/↓）必须手动预设
+  金属体系 → 增加 K 点密度
+  截断能不足 → 增加 Energy Cutoff
+```
+
+**DMol3 SCF 不收敛 → 分层排查**：
+
+```
+Step A：验证物理设置
+  自旋构型是否正确？（过渡金属 #1 失败原因：磁序设错）
+  净电荷是否化学合理？
+  初始几何是否合理？
+
+Step B：数值质量
+  提高 cutoff 和 k 点（降低精度反而加重不收敛）
+  用 Medium 或 Fine，绝不使用 Coarse
+
+Step C：算法调参
+  Charge mixing 0.2 → 0.1 或 0.05（振荡时减小、停滞时增大）
+  DIIS size 6 → 8-10
+  Level Shift 0.1-0.3 Ha（等效于 Gaussian SCF=Shift）
+  过渡金属 → 启用 Hexadecapole 多极展开
+  小 smearing (0.005 Ha) → 收敛后撤掉
+
+Smearing 铁律：0.005-0.01 Ha 可接受（熵贡献 ~1 meV/atom）
+  >0.05 Ha → 结果物理上不可靠，电子结构可能畸变
+```
+
+**Forcite 几何优化不收敛 →**
+```
+- 减小 Max step size (0.5 → 0.2 Å)
+- 力的收敛判据放宽：0.001 → 0.005 eV/Å
+- 最大迭代步数 500 → 2000
+- 检查力场原子类型分配是否正确
+- 初始构型是否存在原子重叠或极度扭曲的键角
+```
+
+**CASTEP 自动重启**：MS 2026 声称 CASTEP & DMol3 支持自动重启收敛。旧版需手动：
+```
+检查 .castep 或 .dmol 输出 → grep "groundstate" 判断收敛
+未收敛 → 保留 .check 文件（CASTEP）或 .dmol 最后构型 → 调整参数 → 重新提交
+```
 
 **Convergence failure →**
 - `SCF=QC`（二次收敛，最稳定但最慢）
