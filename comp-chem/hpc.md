@@ -101,6 +101,23 @@ python <scripts_dir>/remote_ps.py --host <host> --timeout 60           # 长超�
 - **禁止**凭进程 CPU 占用率或运行时间猜测"这个应该已经挂了"
 - **禁止**同一台服务器上既有计算任务又想清理时，不区分计算进程和僵尸进程
 
+## 杀进程 ≠ 删文件（强制规则）
+
+**杀掉计算进程后，严禁随意删除工作目录中的任何文件。**
+
+### 严禁删除的文件
+
+- VASP: `OUTCAR` `OSZICAR` `vasp.log` `WAVECAR` `CHGCAR` `CHG` `CONTCAR` `DOSCAR` `EIGENVAL` `XDATCAR`
+- CP2K: `.restart` `.wfn` `.out` `coord.xyz`（CP2K 续算依赖 `.restart` 和 `.wfn`，删除后进度全部丢失）
+- 通用: `POSCAR` `INCAR` `KPOINTS` `POTCAR` `run_*.sh` `*.inp` `make_potcar.sh` `.hpc_status.json`
+
+### 正确做法
+
+1. **杀进程只杀进程**：`kill <PID>` 或通过 `hpc_job.py kill`，不碰任何文件
+2. **旧输出归档而非删除**：如确实需要清理，移到带时间戳的子目录（如 `old_outputs_20260603/`），不要 `rm`
+3. **需要删文件时**：先列出所有将被删除的文件 + 各自的作用 + 删除原因，**等用户确认后再删**
+4. **CP2K 续算铁律**：`.restart` 和 `.wfn` 绝对不能删——这些是检查点，删除后几何优化进度归零
+
 ---
 
 # HPC 计算任务管理（强制规则）
@@ -387,3 +404,101 @@ hpc_job.py submit \
 - **禁止** 把假成功当真成功写入规则
 - **禁止** 写入未经验证复现的方案
 - **禁止** 把规则写在根 CLAUDE.md（根级只放触发条件）
+
+## S7: Deep Retrospective（深度项目复盘）
+
+### 触发条件
+
+同一项目/任务在跨对话中连续失败，满足以下任一：
+- Sunk-Cost Guardian 已停掉 ≥3 次重试，且 Success Capture 未产出真成功方案
+- 同一服务器/代码/参数组合反复报同类错误
+- 用户要求"深度分析""复盘""为什么总是失败"
+- 换了服务器/参数/方法后问题依然复现 → 说明不是环境问题，是根因更深
+
+### CCRM 原则（Context-Contaminated Restart Model）
+
+**单纯重试失败的操作不会改善结果——上下文污染反而升高错误率。** 复盘必须从零重新审视假设，不带之前失败尝试的偏见。
+
+### 三层复盘框架（来源：SAMULE, EMNLP 2025）
+
+```
+Level 1 — Micro（单次失败回顾）
+  每次提交失败的完整参数快照
+  → error_type + 尝试方案 + 输出特征
+
+Level 2 — Meso（同任务跨尝试模式识别）
+  对比同一项目下的所有失败记录
+  → 共同模式？不同尝试之间的差异和共性？
+  → 哪些参数始终没变过（可能是盲区）？
+
+Level 3 — Macro（跨项目/跨代码的通用教训）  
+  这个问题是否在其他体系/代码上也出现过？
+  → 说明不是体系特异性问题，是方法论根因
+```
+
+### HPC 复盘检查表
+
+**A. 环境假设验证**：
+- [ ] 同一个计算在另一台同配置服务器上是否也失败？（排除单机故障）
+- [ ] 不同 MPI 版本/编译器版本是否表现相同？（排除编译链 bug）
+- [ ] 核心数减半后是否仍然失败？（排除并行 bug）
+- [ ] 小体系（<20 原子）测试是否通过？（排除体系特异性）
+
+**B. 输入文件根本审查**：
+- [ ] POSCAR/初始构型：是否来自可靠来源？原子间距是否物理合理？
+- [ ] POTCAR/赝势：版本是否正确？是否与泛函匹配？有无已知 bug？
+- [ ] INCAR/参数：是否有冲突标签？是否有标签被静默忽略？
+- [ ] KPOINTS：收敛测试是否做过？gamma-centered vs Monkhorst-Pack 是否正确？
+
+**C. 方法论根本审查**：
+- [ ] 选择的泛函/基组/赝势是否适合该化学体系？
+- [ ] Slab/超胞模型：尺寸是否足够？真空层是否合理？偶极修正是否需要？
+- [ ] 磁矩初始化：是否检查了文献中的磁基态？是否有多种可能磁序？
+- [ ] 是否尝试过更保守/更激进的参数两端，而不仅仅是微调？
+
+**D. 联网搜索**（关键一步）：
+```
+python <scripts_dir>/websearch.py "<体系/材料名> VASP convergence issues"
+python <scripts_dir>/websearch.py "<错误关键词> computational chemistry troubleshooting"
+```
+搜索该体系是否有已知的计算难点、社区讨论、推荐参数。
+
+### 复盘报告输出格式
+
+```json
+{
+  "project": "Ni-111 surface adsorption",
+  "failure_count": 5,
+  "period": "2026-05-28 ~ 2026-06-06",
+  "failures": [
+    {"attempt": 1, "error_type": "oom_killed", "fix_tried": "reduce ENCUT 600→500", "result": "still OOM"},
+    {"attempt": 2, "error_type": "oom_killed", "fix_tried": "reduce cores 64→32", "result": "still OOM"},
+    {"attempt": 3, "error_type": "scf_diverged", "fix_tried": "ALGO=All", "result": "passed SCF but crashed in GEO_OPT"},
+    "..."
+  ],
+  "pattern_analysis": {
+    "common_theme": "OOM across all attempts despite reducing ENCUT and cores",
+    "unchanged_params": ["KPOINTS (8x8x1)", "NCORE=1", "vacuum=25Å"],
+    "blind_spot": "KPOINTS 8x8x1 for 2x2 surface → 16 k-points × 4 atoms may still be too many per core"
+  },
+  "root_cause_hypothesis": [
+    {"hypothesis": "真空层 25Å 导致 FFT 网格过大", "evidence": "真空层占总晶胞体积 60%", "confidence": "HIGH"},
+    {"hypothesis": "NCORE=1 导致每核复制全部波函数", "evidence": "32核 × 单核内存 = 总内存 32×", "confidence": "MEDIUM"}
+  ],
+  "recommended_new_approach": [
+    "先压缩真空层到 15Å 做粗收敛 → 收敛后再扩展到 25Å",
+    "NCORE=4 减少并行内存复制",
+    "先用 1x1 表面小体系验证整套参数 → 再扩展到 2x2"
+  ],
+  "needs_web_search": true,
+  "search_queries": ["Ni(111) VASP slab convergence vacuum thickness", "VASP NCORE memory scaling OOM"],
+  "confidence": "MEDIUM"
+}
+```
+
+### 复盘后行动铁律
+
+1. **复盘后禁止直接动手** — 报告复盘结论 → 等用户确认 → 确认后才能执行
+2. **一次只改一个根本假设** — 如果认为是真空层问题，先只改真空层测试，验证通过后再调其他参数
+3. **新方案必须做小体系预验证** — 用最小可行体系（1x1 表面/最小 k 点）跑通再扩展到目标体系
+4. **每个新尝试必须在复盘框架中记录** — 保持 Meso 层的数据积累
