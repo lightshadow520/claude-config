@@ -67,7 +67,50 @@ VASP、ORCA、CP2K、LAMMPS、GROMACS、AMBER、Gaussian、Materials Studio、ML
 | `terminated` | 被终止 (SIGTERM) | 队列墙时间/手动终止 |
 | `killed_by_signal` | 被信号杀死（非 OOM） | 检查具体信号 |
 | `timeout` | 超过 walltime | 增加时间或减小体系 |
+| `scf_diverged` | SCF 迭代发散（电子步能量不降反升） | 立即切换混合参数/算法 |
+| `scf_stagnant` | SCF 迭代停滞（dE 不再缩小但不收敛） | 混合参数/预条件器/算法 |
+| `scf_oscillating` | SCF 迭代震荡（能量反复跳动不衰减） | 电荷晃动→线性混合→Kerker |
 | `generic_error` | exit code 1 | 直接看 OUTCAR/log 末尾 |
+
+## 第一步半：实时收敛监控（强制）
+
+**提交计算后必须周期性检查 OSZICAR/OUTCAR 的 SCF 收敛趋势，不能只等最终结果。**
+
+### 监控指标（从 OUTCAR/OSZICAR 提取）
+
+| 指标 | VASP 来源 | CP2K 来源 | 含义 |
+|------|----------|----------|------|
+| dE（相邻电子步能量差） | OSZICAR 每行第 2 列 | cp2k.out `Energy change` | 越小越接近收敛 |
+| dE 趋势（最近 10 步斜率） | 线性拟合 | 同左 | >0 → 发散；<0 但平 → 停滞 |
+| dE 震荡幅度（最近 10 步 StdDev） | 标准差 | 同左 | >0.1 Ha → 严重震荡 |
+| 收敛率（-log₁₀(dE) vs 步数） | 半对数图斜率 | 同左 | <0.02/步 → 极慢，需要干预 |
+| SCF 步数/总预算 | N/TOTAL (OSZICAR) | SCF step N/MAX_SCF | >80% 用尽 → 几乎一定失败 |
+
+### 干预阈值（任一触发即介入）
+
+```
+🔴 立即干预（别再浪费核心小时）：
+  ├─ dE 最近10步单调递增 → SCF 发散，立刻停
+  ├─ dE 震荡幅度 >0.1 Ha 且不衰减 → 电荷晃动，线性混合
+  └─ SCF 步数 >80% NELM/MAX_SCF 且 dE > 10× EPS_SCF → 必然失败
+
+🟡 预警（标记，下一轮未改善再干预）：
+  ├─ dE 最近10步持平（斜率绝对值 < 0.001 Ha/步）→ 停滞
+  ├─ dE 最近10步 StdDev 在扩大的震荡 → 混合参数可能恶化
+  └─ 收敛率 <0.02/步 → 进展太慢
+
+🟢 正常：
+  └─ dE 单调递减 + 震荡衰减 → 继续等
+```
+
+### 监控频率
+
+| 计算阶段 | 检查频率 |
+|---------|---------|
+| 提交后前 30 步 SCF | 每 10 分钟检查一次 |
+| SCF 稳定收敛中 | 每 30 分钟检查一次 |
+| 接近收敛（dE < 100× EPS_SCF） | 每 15 分钟检查一次 |
+| 几何优化阶段（非电子收敛） | 每 1-2 小时检查一次 |
 
 ## 第二步：按代码排错
 
@@ -91,11 +134,53 @@ VASP、ORCA、CP2K、LAMMPS、GROMACS、AMBER、Gaussian、Materials Studio、ML
 - 内存越界：降低 `ENCUT` 或 `NGX/NGY/NGZ`
 - 检查 POSCAR 中是否有原子重叠（<0.5Å）
 
-**SCF 不收敛 →**
-- `ALGO = All`（比 Normal/Damped 更稳定）
-- `AMIX = 0.2; BMIX = 1.0`（更保守的电荷混合）
-- `ISMEAR = 0; SIGMA = 0.05`（金属体系用 1，SIGMA=0.1）
-- `LDIAG = .TRUE.` 确保使用对角化而不是 Davidson
+**SCF 不收敛 → 五级救援协议**（来源：VASP wiki + Marsman 讲座 + Custodian + Materials Project 验证）
+
+**收敛前分析（OUTCAR GAMMA 特征值）：**
+OUTCAR 每次电子步输出电荷介电矩阵特征值谱。GAMMA 均值 ~1 是最优。
+`AMIX_optimal = AMIX_current / GAMMA_mean`。特征值宽度越大 → 电荷混合越不稳定。
+
+```
+Level 1：保守混合（不改算法）
+  ICHARG = 12（一次性非自洽步，不更新电荷密度，获取轨道）
+  → 跑完后 ICHARG = 2 + AMIX = 0.1 + BMIX = 0.01
+  → 收敛后逐步增大 BMIX 提速
+  
+Level 2：线性混合（针对电荷晃动/slab/表面体系）
+  AMIX = 0.05 + BMIX = 0.0001（接近线性混合）
+  MAXMIX = 10-20（减少 Pulay 混合记忆步数，默认-45）
+  → 对 slab/真空/带电体系尤其有效
+
+Level 3：切换算法
+  绝缘体/小带隙 → ALGO = All（band-by-band CG，最稳定）
+  金属 → ALGO = Fast 或 VeryFast（RMM-DIIS）
+  金属+磁矩复杂 → ALGO = Damped + TIME = 0.4
+
+Level 4：改电子结构设置
+  ISMEAR 策略：
+    - 半导体/绝缘体 → ISMEAR = 0, SIGMA = 0.05
+    - 金属 → ISMEAR = 1, SIGMA = 0.1
+    - 带隙<0.1eV → ISMEAR = -5 (tetrahedron+Blochl，禁止配合 ALGO=All/Damped)
+  注意：ISMEAR < 0 禁止与 ALGO in [All, Damped] 同用（Custodian 强制拦截）
+
+Level 5：磁矩专项
+  AMIX_MAG = 0.4-0.8（磁矩密度混合，默认偏激进）
+  BMIX_MAG = 0.0001（极弱混合保收敛）
+  MAGMOM 设置到物理合理初始值
+  预收敛非磁性 → 拷贝 WAVECAR → 打开 ISPIN=2 重启
+  f 电子体系：AMIX_MAG = 0.8, BMIX_MAG = 0.00001 + L(S)DA+U (U=3-7eV)
+```
+
+**HSE 杂化泛函专项：**
+```
+1. 先用 PBE 预收敛，拷贝 WAVECAR + CHGCAR
+2. ALGO = Damped（变分总能量必需），TIME = 0.5
+3. VASP 6 默认启用 ACE（自适应压缩交换），比 VASP 5 快 ~3 倍
+4. 仍不收敛 → ALGO = All + 降低 ENCUT 20% → 收敛后读 WAVECAR 回到高 ENCUT
+```
+
+**Custodian 的生产级修复逻辑**（Materials Project >10 万次计算验证，成功率 >98%）：
+`VaspErrorHandler` 按优先级依次尝试：AMIX/BMIX 调节 → ALGO 降级（VeryFast → Fast → Normal → Damped）→ WAVECAR 删除（怀疑被写坏）→ 停机报错
 
 ### CP2K
 
@@ -104,20 +189,61 @@ VASP、ORCA、CP2K、LAMMPS、GROMACS、AMBER、Gaussian、Materials Studio、ML
 - 减少 `MAX_SCF` 迭代次数
 - 使用 OT 代替对角化（`RUN_TYPE ENERGY` 等）
 
-**SCF 不收敛 →**
-- 从对角化切换到 OT：
-  ```
-  &SCF
-    SCF_GUESS RESTART
-    EPS_SCF 1.0E-6
-    MAX_SCF 200
-    &OT ON
-      MINIMIZER DIIS
-      PRECONDITIONER FULL_SINGLE_INVERSE
-    &END OT
-  &END SCF
-  ```
-- 用 `SMEARING` 方法替代 `FERMI_DIRAC`
+**SCF 不收敛 → 先判断体系类型再选方案**
+
+**OT 适用性判定**（来源：CP2K 官方文档 + pymatgen）：
+```
+体系有带隙 >0.5eV？
+├─ YES → 使用 OT（快且鲁棒）
+│   ├─ 正常收敛 → FULL_KINETIC + DIIS
+│   ├─ 收敛困难 → FULL_SINGLE_INVERSE + CG
+│   └─ 仍失败 → FULL_ALL + ENERGY_GAP <gap_estimate> + CG
+└─ NO（金属/零带隙/电荷晃动）→ 对角化 + smearing
+```
+
+**OT 预条件器从快到稳定：**
+| 预条件器 | 速度 | 鲁棒性 | 场景 |
+|---------|------|--------|------|
+| FULL_KINETIC | 最快 | 最低 | 常规绝缘体 MD |
+| FULL_SINGLE_INVERSE | 中等 | 中等 | **默认选择**，兼容非整数占据 |
+| FULL_ALL | 最慢 | 最高 | 困难体系，**需要 ENERGY_GAP 低估 HOMO-LUMO 带隙** |
+
+**OT 不收敛时** → `MINIMIZER CG`（比 DIIS 更鲁棒）→ 更新预条件器 → `FULL_ALL + ENERGY_GAP 0.001`
+
+**金属体系（强制对角化 + smearing）：**
+```
+&SCF
+  EPS_SCF 1.0E-6
+  MAX_SCF 200
+  &MIXING
+    METHOD BROYDEN_MIXING
+    ALPHA 0.2       # 0.05（极难）→ 0.4（默认）
+    NBUFFER 8
+  &END MIXING
+  &SMEAR ON
+    METHOD FERMI_DIRAC
+    ELECTRONIC_TEMPERATURE 300  # K
+  &END SMEAR
+&END SCF
+```
+- ALPHA 太大 → 振荡；太小 → 停滞
+- NBUFFER 8-12（更多缓冲步 → 更稳定）
+- 磁矩过渡金属：ALPHA 0.8-1.6 可能反而更好
+- 含 H₂O 界面：ALPHA 低至 0.02
+
+**CUTOFF/REL_CUTOFF 收敛测试协议**（来源：CP2K 官方 CUTOFF 教程）：
+1. 固定 CUTOFF=400 Ry → 变化 REL_CUTOFF: 40, 50, 60, 70, 80 Ry
+2. 选能量收敛达 ~1e-4 Ha 的 REL_CUTOFF（通常 60 Ry 足够）  
+3. 再变化 CUTOFF 并固定选定的 REL_CUTOFF
+4. 生产计算推荐：CUTOFF 400-600, REL_CUTOFF 60（TZVP）/ CUTOFF 600-800, REL_CUTOFF 60-80（TZV2P/QZVP）
+
+**大基组线性相关 →** `ADDED_MOS 100-500` 增加空 KS 轨道
+
+**电荷晃动/水溶液 →** `LEVEL_SHIFT 0.5-1.0 Ha` + 降低 ALPHA
+
+**CP2K 自动化基础设施**（可直接调用）：
+- `cp2k-output-tools`（官方 pip 包）：正则解析 SCF 步/能量/收敛状态
+- `cp2k-input-tools`（官方 pip 包）：纯 Python 验证+编程修改输入参数
 
 ### LAMMPS
 
@@ -406,3 +532,70 @@ Success Capture 是"获利"——止损后找到的方案固化为永久资产�
 - 要么问题没解决（只是绕过了）
 - 要么解决方案不可复现
 → **禁止对同一问题反复触发 Sunk-Cost Guardian 而不做 Success Capture**
+
+---
+
+# 收敛自动化工具与外部资源
+
+本段列出已验证的生产级工具和研究，供构建自动收敛救援系统时参考。
+
+## 生产级工具（可直接集成）
+
+| 工具 | 覆盖代码 | 能力 | 许可 | 链接 |
+|------|---------|------|------|------|
+| **Custodian** | VASP, CP2K, NwChem, Q-Chem | 10+ 内置错误处理器，自动改 INCAR 并重启，>98% 成功率 | BSD | materialsproject.github.io/custodian |
+| **ShakeNBreak** | VASP | 缺陷计算收敛监控+自动修复；切换 ALGO, ISPIN，跳过不可恢复体系 | — | github.com/SMTG-Bham/ShakeNBreak |
+| **atomate2** | VASP, CP2K, Q-Chem | 预置工作流（能带/声子/弹性/介电）+ Custodian 集成 + FireWorks SLURM 调度 | BSD | materialsproject.github.io/atomate2 |
+| **quacc** | VASP, QE, Q-Chem, MLPs | 高通量平台，多引擎分发（Parsl/Prefect/Covalent），Custodian 集成 | BSD-3 | github.com/Quantum-Accelerators/quacc |
+| **AiiDA** | VASP, CP2K, QE, Gaussian, ORCA 等 | BaseRestartWorkChain：失败→改参→重启；完整溯源数据库 | MIT | aiida.net |
+| **jobflow-remote** | 通用 | HPC 守护进程；双级错误分类（REMOTE_ERROR 自动重试+退避，FAILED 手动重试） | BSD | github.com/Matgenix/jobflow-remote |
+| **cp2k-output-tools** | CP2K | 官方 pip 包，正则解析 SCF 步/能量/收敛状态 | — | github.com/cp2k/cp2k-output-tools |
+| **cp2k-input-tools** | CP2K | 官方 pip 包，纯 Python 验证+编程修改输入参数 | — | github.com/cp2k/cp2k-input-tools |
+
+## LLM Agent 系统（2025 年新兴）
+
+| 系统 | 覆盖代码 | 方法 | 关键发现 |
+|------|---------|------|---------|
+| **VASPilot** | VASP | CrewAI 多 Agent（Manager+VASP+验证）+ MCP 工具 | 中科院出品；收敛测试+错误解析+参数调整+Web UI |
+| **DREAMS** | VASP | 层级 LLM Agent + 共享画布 | 诊断 SCF 失败→建议 smearing/mixing_beta/mixing_mode/electron_maxstep |
+| **El Agente Q** | ORCA, xTB | 22 Agent 层级 + 闭环恢复 | >87% 任务成功率；生成→验证→修复→重试 |
+| **Masgent** | VASP, MLPs | `pip install masgent`；内置收敛测试模板 | MIT 许可 |
+| **AutoDFT** | VASP | 7 Agent + History 存储+StepOutcomeSummary | 层级规划+每步监控裁决+自动恢复 |
+
+## ML 辅助收敛
+
+| 方法 | 机制 | 效果 | 来源 |
+|------|------|------|------|
+| 贝叶斯优化电荷混合 (Benaissa 2025) | BO 自动调 AMIX/BMIX | 比 VASP 默认参数更快收敛 | hal-04984658 |
+| magman-llm | LLM 预测 SCF 收敛/发散 + 置信度 | 二进制输出，ROC-AUC 评估 | github.com/spdkit/magman-llm |
+| 密度矩阵 ML 预测 (2024-2026) | 训练模型预测接近 SCF 解的初始密度矩阵 | SCF 步数减少 33-54% | 多篇 JCTC/JCP/arXiv |
+| GAMMA 特征值自适应 | OUTCAR 特征值谱 → AMIX_optimal | 数学严格推导 | VASP wiki + MMSE 6905/8795 |
+
+## 与本系统的集成路径
+
+```
+hpc_watcher.py 监控输出文件 mtime（已有）
+  │
+  ├─ 扩展：解析 OSZICAR/cp2k.out 的 SCF 收敛趋势
+  │    ├─ dE 趋势分类：diverging / oscillating / stagnating / converging
+  │    └─ 触发干预阈值 → 更新 .hpc_status.json 警告字段
+  │
+  ├─ 扩展：自动分级救援
+  │    ├─ Level 1-3: 直接改 INCAR/input 参数（hpc_watcher 本地执行）
+  │    ├─ Level 4-5: 需要 LLM 判断（下载输出→check_calc.py→Agent 分析→建议参数）
+  │    └─ 参考 Custodian 的 handler 优先级经验
+  │
+  └─ 扩展：收敛经验归档 (S6)
+       └─ 每次救援成功 → .hpc_status.json 记录 recovery_path → 归档进 diagnostics.md
+```
+
+## 参考来源
+
+- VASP wiki Troubleshooting: https://www.vasp.at/wiki/index.php/Category:Electronic_Convergence
+- VASP 讲座 Basics2 (Marsman): https://www.vasp.at/wiki/images/b/b6/VASP_lecture_Basics2.pdf
+- CP2K OT 文档: https://manual.cp2k.org/trunk/CP2K_INPUT/FORCE_EVAL/DFT/SCF/OT.html
+- CP2K CUTOFF 教程: https://manual.cp2k.org/trunk/methods/dft/cutoff.html
+- SCF Convergence Guide (混合参数优化): surfchemsci.com / theochemsci.com
+- Custodian 源码: https://github.com/materialsproject/custodian
+- Woods et al. (2019): "Computing the SCF in KS-DFT" — J. Phys.: Condens. Matter
+- Benaissa et al. (2025): "BO for DFT simulations" — Computational Condensed Matter
