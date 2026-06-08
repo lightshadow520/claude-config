@@ -210,7 +210,8 @@ See sci-color skill for detailed guidance. Show terminal output directly — nev
 **触发词**（命中任一即加载）：
 SSH、远程服务器、host、mpirun、vasp_std、cp2k、lammps、gaussian、orca、
 nohup、提交计算、查看进程、kill 进程、服务器进程、hpc_job、hpc_watcher、
-remote_ps、连接超时、服务器负载、queue、作业调度
+remote_ps、连接超时、服务器负载、queue、作业调度、autodl、AutoDL、
+docker、Docker、容器、GPUshare、多线程加速、MPICH、OpenMPI
 
 → **加载** `<config_dir>/comp-chem/hpc.md`
 

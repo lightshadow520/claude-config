@@ -32,6 +32,13 @@ sshpass -p 'password' ssh -o StrictHostKeyChecking=no -o ConnectTimeout=15 user@
 用户的计算任务（CP2K/VASP 等）会让 CPU 跑满（load average = 核数），
 SSH daemon 也是用户态进程，CPU 被抢光时 SSH 握手会超时。
 
+**AutoDL/GPUshare 等代理网关平台**：SSH 连接走的是代理网关（如 `connect.xxx.seetacloud.com`），不是直接连实例。网关有独立的空闲超时——几分钟不传数据就断开。**网页终端不经过 SSH 代理，所以不会断。**
+
+**所有连接函数已内置 keepalive（30s 心跳）：**
+- paramiko: `transport.set_keepalive(30)`（在 `client.connect()` 之后）
+- 原生 SSH: `-o ServerAliveInterval=30 -o ServerAliveCountMax=3`
+- 覆盖：`remote_ps.py`、`hpc_job.py`（ssh_cmd/scp_upload/scp_download）
+
 **遇到 SSH 连接失败时，禁止直接说"换服务器"。必须按以下步骤：**
 
 1. 先试**更长的超时**（ConnectTimeout=30s 甚至 60s），不要用默认 10s
@@ -44,6 +51,85 @@ SSH daemon 也是用户态进程，CPU 被抢光时 SSH 握手会超时。
 - 一次连接失败就直接说"XX 服务器断了，换一台"
 - 在没确认之前建议用户杀进程、重启服务器
 - 不尝试其他端口就下结论
+
+---
+
+# AutoDL / Docker 环境 MPI 多进程方案
+
+本段覆盖 AutoDL、GPUshare 等 Docker 容器平台的 MPI 并行计算问题。
+
+## 核心问题：OpenMPI + Docker = X11 探测死锁
+
+**症状**：`mpirun` 永远挂死，不产生任何输出，进程停留在 S 状态（interruptible sleep）。即使用 `timeout` + SIGKILL 也杀不掉。
+
+**根因**：OpenMPI 的 `orted` 守护进程启动时会遍历 X11 端口（6000-6063，对应 DISPLAY :0 到 :63），**无论 DISPLAY 环境变量是否设置**。AutoDL 等平台的 Docker 容器通过 NAT 规则将某些 X11 端口（如 6007）转发到宿主机的 VNC Server。VNC 接受 TCP 连接但不响应 X11 协议握手，导致 `orted` 在 `poll()` 中永久等待。
+
+**诊断方法**（在服务器上执行）：
+```bash
+# 1. 确认 MPI 实现类型
+mpirun --version 2>&1 | head -2
+# 输出含 "HYDRA" → MPICH（无此问题）
+# 输出含 "Open MPI" / "orted" → OpenMPI（可能受影响）
+
+# 2. 如为 OpenMPI，strace 确认是否卡在 X11 端口
+timeout 3 strace -f mpirun --allow-run-as-root -np 1 hostname 2>&1 | grep -E "connect.*600[0-9]|poll.*POLLIN"
+# 看到 connect() 成功 + poll() 不返回 → 确认 X11 死锁
+
+# 3. 确认 Docker 环境
+test -f /.dockerenv && echo "Docker 容器" || echo "非 Docker"
+cat /proc/1/cgroup | head -1
+```
+
+## 推荐方案：换用 MPICH（首选）
+
+MPICH 的 Hydra 进程管理器用 `fork()+exec()` 直接启动进程，不走 X11 探测。AutoDL 上已验证通过。
+
+```bash
+# 安装 MPICH（替换 OpenMPI）
+apt install mpich
+
+# 验证
+mpirun -np 4 hostname          # 应秒过
+mpirun -np 30 vasp_std         # VASP 多进程并行
+```
+
+**注意**：MPICH 不需要 `--allow-run-as-root` 参数。如果之前用 OpenMPI 的 `vasp_std` 二进制，需要重新编译链接 MPICH。
+
+## 备选方案：OpenMPI + LD_PRELOAD 拦截（不改 MPI 实现）
+
+如果不能/不想换 MPICH，用 `block_x11.so` 拦截 X11 端口连接。
+
+脚本位置：`<scripts_dir>/block_x11.c`
+
+```bash
+# 1. 上传并编译（服务器上）
+gcc -shared -fPIC -o /tmp/block_x11.so block_x11.c -ldl
+
+# 2. 使用
+LD_PRELOAD=/tmp/block_x11.so mpirun --allow-run-as-root -np 30 vasp_std
+
+# 3. 或写入 run_vasp.sh
+export LD_PRELOAD=/tmp/block_x11.so
+mpirun --allow-run-as-root -np $NPROCS vasp_std
+```
+
+**原理**：拦截对 `127.0.0.1:6000-6063` 的 `connect()` 调用，直接返回 `ECONNREFUSED`。orted 探测一圈全被拒，100ms 内跳过，继续正常 MPI 初始化。
+
+## 提交前检查清单（AutoDL Docker 环境）
+
+每次在新服务器上首次提交计算前：
+
+```
+[ ] mpirun -np 1 hostname          # 单进程 MPI 能跑
+[ ] mpirun -np 4 hostname          # 多进程 MPI 能跑
+[ ] mpirun --version               # 确认 MPI 实现（优先 MPICH）
+[ ] test -f /.dockerenv            # 确认是否 Docker 环境
+[ ] df -h /dev/shm                 # 共享内存 ≥ 1GB
+[ ] ulimit -s unlimited            # 栈空间无限制
+[ ] vasp_std 能启动并输出 "No INCAR found"（验证 MPI+二进制正常）
+```
+
+**铁律**：Docker 环境 + OpenMPI = 必须先做 `mpirun -np 1 hostname` 测试。如果挂死，直接走 MPICH 方案或 LD_PRELOAD 方案，不要反复调 MCA 参数（`--mca orte_forwarder_threshold 0`、`--mca plm isolated` 等均无效——X11 探测在 MCA 初始化之前执行）。
 
 ---
 
