@@ -1,0 +1,603 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$description": "结构化计算化学错误知识库 — Agent 可查询的错误诊断与修复方案",
+  "version": "1.0.0",
+  "last_updated": "2026-06-08",
+
+  "errors": [
+    {
+      "error_type": "oom_killed",
+      "severity": "critical",
+      "symptoms": [
+        "进程被系统杀死，exit code = -9 (SIGKILL)",
+        "dmesg 中出现 'Out of memory: Killed process'",
+        "OUTCAR/log 末尾显示内存使用量接近节点上限",
+        "hpc_status.json 中 error_type = 'oom_killed'"
+      ],
+      "diagnostic_checks": [
+        "dmesg | grep -i 'out of memory' | tail -5",
+        "grep 'maximum memory' OUTCAR | tail -1",
+        "free -h 查看节点总内存",
+        "检查 mpirun -np 数量 × 单进程内存是否超过节点限制"
+      ],
+      "root_causes": [
+        {"cause": "ENCUT 过高导致平面波基组过大", "likelihood": "high"},
+        {"cause": "真空层过大导致 FFT 网格爆炸", "likelihood": "medium"},
+        {"cause": "NCORE 设置不当导致内存复制", "likelihood": "medium"},
+        {"cause": "K 点过多导致内存需求增加", "likelihood": "low"},
+        {"cause": "核数过多，总内存超限", "likelihood": "high"}
+      ],
+      "fixes": [
+        {
+          "action": "降低 ENCUT",
+          "params": {"ENCUT": {"direction": "reduce", "step": 50, "min": 200, "rule": "≥ max(ENMAX) × 1.3"}},
+          "confidence": "HIGH",
+          "applies_to": ["vasp"],
+          "side_effects": "精度略微降低，通常 < 1 meV/atom",
+          "validation": "重新提交后检查内存峰值是否下降"
+        },
+        {
+          "action": "切换 ALGO = VeryFast",
+          "params": {"ALGO": "VeryFast"},
+          "confidence": "HIGH",
+          "applies_to": ["vasp"],
+          "side_effects": "内存减少 ~30%，速度可能提升 20%，精度变化极小",
+          "validation": "比较前后 OUTCAR 中 maximum memory used"
+        },
+        {
+          "action": "调整 NCORE",
+          "params": {"NCORE": {"rule": "= 总核数 / KPAR，最小化内存复制"}},
+          "confidence": "MEDIUM",
+          "applies_to": ["vasp"],
+          "side_effects": "影响并行效率",
+          "validation": "每次改后检查内存峰值"
+        },
+        {
+          "action": "使用 KSPACING 代替 KPOINTS 文件",
+          "params": {"KSPACING": {"suggested": 0.5}},
+          "confidence": "MEDIUM",
+          "applies_to": ["vasp"],
+          "side_effects": "K 点密度降低",
+          "validation": "检查总能收敛"
+        },
+        {
+          "action": "降低 CUTOFF 和 REL_CUTOFF",
+          "params": {"CUTOFF": {"direction": "reduce", "min": 200}, "REL_CUTOFF": {"direction": "reduce", "min": 40}},
+          "confidence": "HIGH",
+          "applies_to": ["cp2k"],
+          "side_effects": "精度降低",
+          "validation": "做 CUTOFF 收敛测试"
+        },
+        {
+          "action": "减小 cutoff + 调整处理器网格",
+          "params": {},
+          "confidence": "MEDIUM",
+          "applies_to": ["lammps"],
+          "side_effects": "影响力场精度",
+          "validation": "重新提交检查内存"
+        },
+        {
+          "action": "减小 %Mem",
+          "params": {"%Mem": {"direction": "reduce", "step": 10, "max": 90}},
+          "confidence": "HIGH",
+          "applies_to": ["gaussian"],
+          "side_effects": "可能影响收敛速度",
+          "validation": "检查输出文件"
+        },
+        {
+          "action": "降低 %maxcore",
+          "params": {"%maxcore": {"direction": "reduce", "unit": "MB per core"}},
+          "confidence": "HIGH",
+          "applies_to": ["orca"],
+          "side_effects": "影响计算速度",
+          "validation": "检查内存使用峰值"
+        }
+      ],
+      "cross_references": ["Deadlock_Timeout", "scf_diverged"],
+      "source": "diagnostics.md + hpc_watcher.py dmesg 检测"
+    },
+    {
+      "error_type": "Deadlock_Timeout",
+      "severity": "critical",
+      "symptoms": [
+        "进程存在但不消耗 CPU（CPU% ≈ 0）",
+        "输出文件 mtime 超过 heartbeat 阈值未更新",
+        "hpc_status.json 中 error_type = 'Deadlock_Timeout'",
+        "VASP 典型：FEWALD 子程序卡死"
+      ],
+      "diagnostic_checks": [
+        "remote_ps.py --diagnose 检查进程状态",
+        "strace -p <PID> 查看卡在哪个系统调用",
+        "检查 OUTCAR 最后输出是否停在 FEWALD / POTLOK",
+        "ls -la --time-style=+%s 检查输出文件最后修改时间"
+      ],
+      "root_causes": [
+        {"cause": "真空层过大导致 FFT 网格爆炸（VASP FEWALD 卡死最主因）", "likelihood": "high"},
+        {"cause": "MPI 进程间通信死锁", "likelihood": "medium"},
+        {"cause": "OpenMP 与 MPI 线程冲突", "likelihood": "medium"},
+        {"cause": "I/O 阻塞（磁盘满/NFS 挂死）", "likelihood": "low"},
+        {"cause": "X11 端口探测死锁（AutoDL Docker + OpenMPI 特有）", "likelihood": "high"}
+      ],
+      "fixes": [
+        {
+          "action": "收窄真空层",
+          "params": {"vacuum": {"direction": "reduce", "rule": "≤ 20Å，必要时用偶极修正代替"}},
+          "confidence": "HIGH",
+          "applies_to": ["vasp"],
+          "side_effects": "可能引入层间相互作用",
+          "validation": "检查层间能量收敛"
+        },
+        {
+          "action": "设置 LREAL = Auto",
+          "params": {"LREAL": "Auto"},
+          "confidence": "MEDIUM",
+          "applies_to": ["vasp"],
+          "side_effects": "实空间投影，精度略低于倒空间",
+          "validation": "比较总能"
+        },
+        {
+          "action": "切换 MPI 实现（OpenMPI → MPICH）",
+          "params": {},
+          "confidence": "HIGH",
+          "applies_to": ["vasp", "cp2k", "lammps", "gaussian", "orca", "qe"],
+          "side_effects": "需重编译 VASP",
+          "validation": "mpirun -np 1 hostname 测试"
+        },
+        {
+          "action": "使用 LD_PRELOAD block_x11.so 拦截 X11 端口",
+          "params": {"LD_PRELOAD": "/tmp/block_x11.so"},
+          "confidence": "HIGH",
+          "applies_to": ["vasp", "cp2k", "lammps", "gaussian", "orca", "qe"],
+          "side_effects": "仅影响 X11 转发，不影响计算",
+          "validation": "仅适用于 OpenMPI + Docker 环境"
+        },
+        {
+          "action": "设置环境变量防止 MPI/OpenMP 冲突",
+          "params": {"OMP_NUM_THREADS": 1, "I_MPI_SHM_LMT": "shm"},
+          "confidence": "MEDIUM",
+          "applies_to": ["vasp", "cp2k", "qe"],
+          "side_effects": "禁用 OpenMP 线程并行",
+          "validation": "检查 CPU 利用率"
+        }
+      ],
+      "cross_references": ["oom_killed", "scf_diverged"],
+      "source": "diagnostics.md + hpc_watcher.py heartbeat 检测"
+    },
+    {
+      "error_type": "segfault",
+      "severity": "critical",
+      "symptoms": [
+        "进程收到 SIGSEGV (signal 11) 信号退出",
+        "hpc_status.json 中 error_type = 'segfault'",
+        "dmesg 中出现 segfault 记录",
+        "VASP 可能在读取 POTCAR 或初始化 FFT 网格时崩溃"
+      ],
+      "diagnostic_checks": [
+        "ulimit -s 确认栈大小是否为 unlimited",
+        "检查 POSCAR 中是否有原子重叠（任意原子对 < 0.5Å）",
+        "检查 POTCAR 的 ENMAX 是否与 INCAR 的 ENCUT 匹配",
+        "dmesg | tail -20 查看 segfault 地址"
+      ],
+      "root_causes": [
+        {"cause": "栈溢出：ulimit -s 未设 unlimited（VASP/CP2K 头号杀手）", "likelihood": "high"},
+        {"cause": "POSCAR 中原子重叠", "likelihood": "high"},
+        {"cause": "内存越界访问", "likelihood": "medium"},
+        {"cause": "POTCAR 损坏或版本不匹配", "likelihood": "low"},
+        {"cause": "MPI 库与编译器版本不兼容", "likelihood": "low"}
+      ],
+      "fixes": [
+        {
+          "action": "设置 ulimit -s unlimited + OMP_STACKSIZE=512M",
+          "params": {"ulimit_s": "unlimited", "OMP_STACKSIZE": "512M"},
+          "confidence": "HIGH",
+          "applies_to": ["vasp", "cp2k", "qe"],
+          "side_effects": "无",
+          "validation": "ulimit -s 确认已生效"
+        },
+        {
+          "action": "检查并修复原子重叠",
+          "params": {},
+          "confidence": "HIGH",
+          "applies_to": ["vasp", "cp2k", "lammps", "qe", "castep"],
+          "side_effects": "可能改变初始构型",
+          "validation": "POSCAR 中所有原子对距离 > 0.5Å"
+        },
+        {
+          "action": "降低 ENCUT 或 NGX/NGY/NGZ",
+          "params": {"ENCUT": {"direction": "reduce", "step": 50}},
+          "confidence": "MEDIUM",
+          "applies_to": ["vasp"],
+          "side_effects": "精度降低",
+          "validation": "检查内存分配是否正常"
+        }
+      ],
+      "cross_references": ["oom_killed"],
+      "source": "diagnostics.md + hpc_watcher.py signal 诊断"
+    },
+    {
+      "error_type": "aborted",
+      "severity": "critical",
+      "symptoms": [
+        "进程收到 SIGABRT (signal 6) 信号退出",
+        "通常伴随断言失败的错误信息",
+        "hpc_status.json 中 error_type = 'aborted'"
+      ],
+      "diagnostic_checks": [
+        "检查输出文件末尾的错误信息",
+        "验证 INCAR 参数值是否在合法范围内",
+        "检查 POTCAR 排序是否与 POSCAR 一致"
+      ],
+      "root_causes": [
+        {"cause": "INCAR 参数值不合法（如 ENCUT < 100）", "likelihood": "high"},
+        {"cause": "POTCAR 顺序与 POSCAR 原子种类不匹配", "likelihood": "high"},
+        {"cause": "输入文件格式错误", "likelihood": "medium"},
+        {"cause": "编译器 bug 触发运行时断言", "likelihood": "low"}
+      ],
+      "fixes": [
+        {
+          "action": "逐项检查 INCAR 参数合法性",
+          "params": {},
+          "confidence": "HIGH",
+          "applies_to": ["vasp"],
+          "side_effects": "无",
+          "validation": "参考 VASP wiki 验证每个标签的值域"
+        },
+        {
+          "action": "检查 POTCAR 排序和元素映射",
+          "params": {},
+          "confidence": "HIGH",
+          "applies_to": ["vasp"],
+          "side_effects": "无",
+          "validation": "grep TITEL POTCAR 确认元素顺序与 POSCAR 一致"
+        }
+      ],
+      "cross_references": ["generic_error"],
+      "source": "diagnostics.md + hpc_watcher.py signal 诊断"
+    },
+    {
+      "error_type": "terminated",
+      "severity": "warning",
+      "symptoms": [
+        "进程收到 SIGTERM (signal 15) 信号退出",
+        "可能是用户手动终止或队列系统墙时到达",
+        "hpc_status.json 中 error_type = 'terminated'"
+      ],
+      "diagnostic_checks": [
+        "检查是否到达 walltime 限制",
+        "确认是否有人手动 kill",
+        "检查队列系统的作业日志"
+      ],
+      "root_causes": [
+        {"cause": "SLURM/队列 walltime 到期", "likelihood": "high"},
+        {"cause": "用户或 Agent 手动终止", "likelihood": "medium"},
+        {"cause": "系统维护停机", "likelihood": "low"}
+      ],
+      "fixes": [
+        {
+          "action": "增加 walltime 或使用续算",
+          "params": {},
+          "confidence": "HIGH",
+          "applies_to": ["vasp", "cp2k", "lammps", "gaussian", "orca", "qe"],
+          "side_effects": "队列等待时间可能变长",
+          "validation": "检查 walltime 是否合理"
+        }
+      ],
+      "cross_references": ["oom_killed"],
+      "source": "diagnostics.md + hpc_watcher.py signal 诊断"
+    },
+    {
+      "error_type": "timeout",
+      "severity": "warning",
+      "symptoms": [
+        "hpc_watcher.py 检测到运行时间超过 walltime",
+        "进程可能仍活跃但设置的时间已到",
+        "hpc_status.json 中 error_type = 'timeout'"
+      ],
+      "diagnostic_checks": [
+        "检查 walltime 设置是否合理",
+        "估算剩余步数和每步耗时",
+        "确认是否可以使用续算"
+      ],
+      "root_causes": [
+        {"cause": "walltime 设置过短", "likelihood": "high"},
+        {"cause": "体系过大导致每步耗时超出预期", "likelihood": "high"},
+        {"cause": "SCF 不收敛导致每步耗时增加", "likelihood": "medium"}
+      ],
+      "fixes": [
+        {
+          "action": "增加 walltime 或减小体系",
+          "params": {},
+          "confidence": "HIGH",
+          "applies_to": ["vasp", "cp2k", "lammps", "gaussian", "orca", "qe"],
+          "side_effects": "队列等待时间可能变长",
+          "validation": "重新估算 walltime"
+        },
+        {
+          "action": "使用续算功能",
+          "params": {},
+          "confidence": "HIGH",
+          "applies_to": ["vasp", "cp2k"],
+          "side_effects": "VASP 需保留 WAVECAR，CP2K 需保留 .restart",
+          "validation": "检查续算文件完整性"
+        }
+      ],
+      "cross_references": ["terminated", "scf_stagnant"],
+      "source": "hpc_watcher.py walltime 检测"
+    },
+    {
+      "error_type": "scf_diverged",
+      "severity": "critical",
+      "symptoms": [
+        "OSZICAR 中 dE 单调递增（电子步能量不降反升）",
+        "SCF 步数快速增长但 dE 不收敛",
+        "OUTCAR 中 GAMMA 特征值宽度极大",
+        "提示 'SCF cycle did not converge'"
+      ],
+      "diagnostic_checks": [
+        "python scripts/check_calc.py <OUTCAR> --diagnose",
+        "检查 dE 最近 10 步趋势（单调递增 → 发散）",
+        "检查 GAMMA 特征值均值（OUTCAR 中搜索 'eigenvalue spectrum'）",
+        "确认体系类型（金属/绝缘体/磁矩）是否与 ALGO/ISMEAR 匹配"
+      ],
+      "root_causes": [
+        {"cause": "初始电荷密度质量差（随机初始化对困难体系不够）", "likelihood": "high"},
+        {"cause": "AMIX/BMIX 默认值不适合当前体系", "likelihood": "high"},
+        {"cause": "金属体系用了非金属的 ISMEAR 设置", "likelihood": "medium"},
+        {"cause": "磁矩初始化未设或设错", "likelihood": "medium"},
+        {"cause": "杂化泛函（HSE 等）直接从头算", "likelihood": "low"}
+      ],
+      "fixes": [
+        {
+          "action": "ICHARG=12 非自洽步获取初始轨道",
+          "params": {"ICHARG": 12},
+          "confidence": "HIGH",
+          "applies_to": ["vasp"],
+          "side_effects": "增加一步计算",
+          "validation": "完成后设 ICHARG=2 + 保守 AMIX/BMIX 重新自洽"
+        },
+        {
+          "action": "保守混合参数",
+          "params": {"AMIX": 0.1, "BMIX": 0.01, "AMIX_MAG": 0.4, "BMIX_MAG": 0.0001},
+          "confidence": "HIGH",
+          "applies_to": ["vasp"],
+          "side_effects": "收敛变慢但稳定",
+          "validation": "逐步增大 AMIX/BMIX 提速"
+        },
+        {
+          "action": "切换算法（绝缘体 → ALGO=All，金属 → ALGO=Fast）",
+          "params": {},
+          "confidence": "HIGH",
+          "applies_to": ["vasp"],
+          "side_effects": "ALGO=All 比 VeryFast 慢 ~50%",
+          "validation": "检查每步 dE 趋势"
+        },
+        {
+          "action": "切换 OT → 对角化 + smearing",
+          "params": {"METHOD": "BROYDEN_MIXING", "ALPHA": 0.2, "ELECTRONIC_TEMPERATURE": 300},
+          "confidence": "HIGH",
+          "applies_to": ["cp2k"],
+          "side_effects": "金属/零带隙体系必须用对角化",
+          "validation": "检查 SCF 收敛趋势"
+        }
+      ],
+      "cross_references": ["scf_stagnant", "scf_oscillating"],
+      "source": "diagnostics.md VASP 五级救援协议 + CP2K OT/对角化决策树"
+    },
+    {
+      "error_type": "scf_stagnant",
+      "severity": "warning",
+      "symptoms": [
+        "OSZICAR 中 dE 不再缩小但始终 > EPS_SCF × 10",
+        "dE 最近 10 步斜率绝对值 < 0.001 Ha/步",
+        "收敛率 < 0.02/步（半对数图斜率极小）",
+        "SCF 步数接近 NELM 但 dE 仍不满足收敛条件"
+      ],
+      "diagnostic_checks": [
+        "python scripts/check_calc.py <OUTCAR> --diagnose",
+        "检查 dE 最近 10 步线性拟合斜率",
+        "检查 AMIX/BMIX 是否需要调整",
+        "确认预条件器设置（FULL_KINETIC → FULL_SINGLE_INVERSE → FULL_ALL）"
+      ],
+      "root_causes": [
+        {"cause": "AMIX 过大导致电荷密度更新过于保守", "likelihood": "high"},
+        {"cause": "预条件器不够强（CP2K OT）", "likelihood": "high"},
+        {"cause": "自旋分裂体系未预设 MAGMOM", "likelihood": "medium"},
+        {"cause": "能带结构复杂（d/f 电子）", "likelihood": "medium"}
+      ],
+      "fixes": [
+        {
+          "action": "增大 AMIX + 减小 BMIX（VASP 线性混合）",
+          "params": {"AMIX": {"direction": "decrease"}, "BMIX": {"direction": "decrease"}, "MAXMIX": {"range": [10, 20]}},
+          "confidence": "HIGH",
+          "applies_to": ["vasp"],
+          "side_effects": "slab/真空/带电体系尤其有效",
+          "validation": "检查 dE 趋势变化"
+        },
+        {
+          "action": "升级预条件器（FULL_KINETIC → FULL_SINGLE_INVERSE → FULL_ALL）",
+          "params": {"PRECONDITIONER": "FULL_ALL", "ENERGY_GAP": 0.001},
+          "confidence": "HIGH",
+          "applies_to": ["cp2k"],
+          "side_effects": "计算变慢但更稳定",
+          "validation": "检查 SCF 收敛"
+        },
+        {
+          "action": "设置 MAGMOM 到物理合理值",
+          "params": {},
+          "confidence": "MEDIUM",
+          "applies_to": ["vasp", "cp2k"],
+          "side_effects": "无",
+          "validation": "检查 OUTCAR 中磁矩是否收敛到物理值"
+        }
+      ],
+      "cross_references": ["scf_diverged", "scf_oscillating"],
+      "source": "diagnostics.md VASP 五级救援协议 Level 2 + CP2K OT 预条件器梯度"
+    },
+    {
+      "error_type": "scf_oscillating",
+      "severity": "warning",
+      "symptoms": [
+        "OSZICAR 中能量反复跳动，不衰减",
+        "dE 最近 10 步 StdDev > 0.1 Ha",
+        "dE 震荡幅度在扩大或维持不衰减",
+        "OUTCAR 中电荷密度来回摆动"
+      ],
+      "diagnostic_checks": [
+        "python scripts/check_calc.py <OUTCAR> --diagnose",
+        "计算 dE 最近 10 步标准差异常值",
+        "检查是否电荷晃动（charge sloshing）",
+        "确认是否 slab/带电/界面体系"
+      ],
+      "root_causes": [
+        {"cause": "电荷晃动（charge sloshing）— slab/界面体系常见", "likelihood": "high"},
+        {"cause": "AMIX 过大 → 混合过度导致过冲/欠冲振荡", "likelihood": "high"},
+        {"cause": "Pulay 混合记忆太长（默认 MAXMIX=-45）", "likelihood": "medium"},
+        {"cause": "带电体系电荷分布不稳定", "likelihood": "medium"}
+      ],
+      "fixes": [
+        {
+          "action": "极度保守的线性混合",
+          "params": {"AMIX": 0.05, "BMIX": 0.0001, "MAXMIX": 10},
+          "confidence": "HIGH",
+          "applies_to": ["vasp"],
+          "side_effects": "SCF 步数大幅增加，但稳定",
+          "validation": "收敛后逐步增大 AMIX 提速"
+        },
+        {
+          "action": "Kerker 混合 + 降低 ALPHA",
+          "params": {"METHOD": "KERKER_MIXING", "ALPHA": 0.02},
+          "confidence": "HIGH",
+          "applies_to": ["cp2k"],
+          "side_effects": "含 H2O 界面体系有效",
+          "validation": "检查 dE 震荡是否衰减"
+        },
+        {
+          "action": "LEVEL_SHIFT 稳定电荷",
+          "params": {"LEVEL_SHIFT": {"range": [0.5, 1.0], "unit": "Ha"}},
+          "confidence": "MEDIUM",
+          "applies_to": ["cp2k"],
+          "side_effects": "略微偏离物理基态",
+          "validation": "收敛后撤掉 LEVEL_SHIFT 验证"
+        }
+      ],
+      "cross_references": ["scf_diverged", "scf_stagnant"],
+      "source": "diagnostics.md VASP Level 2 线性混合 + CP2K 电荷晃动方案"
+    },
+    {
+      "error_type": "killed_by_signal",
+      "severity": "critical",
+      "symptoms": [
+        "进程收到非 SIGKILL/SIGSEGV/SIGABRT 的其他信号退出",
+        "hpc_status.json 中 error_type = 'killed_by_signal'",
+        "需要检查具体信号确定原因"
+      ],
+      "diagnostic_checks": [
+        "hpc_status.json 中 actual_signal 字段",
+        "dmesg 查看完整信号记录",
+        "检查是否同时有其他系统事件"
+      ],
+      "root_causes": [
+        {"cause": "硬件故障（内存/CPU 错误）", "likelihood": "low"},
+        {"cause": "系统资源限制（cgroup 限制触发）", "likelihood": "medium"},
+        {"cause": "IB/RoCE 网络故障", "likelihood": "low"}
+      ],
+      "fixes": [
+        {
+          "action": "换一台服务器重试",
+          "params": {},
+          "confidence": "MEDIUM",
+          "applies_to": ["vasp", "cp2k", "lammps", "gaussian", "orca", "qe"],
+          "side_effects": "无",
+          "validation": "同组输入在不同服务器上验证"
+        }
+      ],
+      "cross_references": ["segfault", "oom_killed"],
+      "source": "hpc_watcher.py signal 诊断"
+    },
+    {
+      "error_type": "generic_error",
+      "severity": "warning",
+      "symptoms": [
+        "进程 exit code = 1，非信号终止",
+        "通常在 OUTCAR/log 末尾有具体错误信息",
+        "hpc_status.json 中 error_type = 'generic_error'"
+      ],
+      "diagnostic_checks": [
+        "tail -100 OUTCAR（或对应输出文件）",
+        "python scripts/check_calc.py --diagnose",
+        "检查是否输入文件格式/内容错误"
+      ],
+      "root_causes": [
+        {"cause": "输入文件内容有误", "likelihood": "high"},
+        {"cause": "计算参数组合冲突", "likelihood": "high"},
+        {"cause": "磁盘空间不足", "likelihood": "medium"},
+        {"cause": "文件权限问题", "likelihood": "low"}
+      ],
+      "fixes": [
+        {
+          "action": "下载输出文件 → check_calc.py --diagnose 深层分析",
+          "params": {},
+          "confidence": "HIGH",
+          "applies_to": ["vasp", "cp2k", "lammps", "gaussian", "orca", "qe", "castep"],
+          "side_effects": "无",
+          "validation": "根据诊断结果修复"
+        }
+      ],
+      "cross_references": ["aborted", "scf_diverged"],
+      "source": "diagnostics.md"
+    }
+  ],
+
+  "code_specific_patterns": {
+    "vasp": {
+      "common_errors": ["oom_killed", "segfault", "scf_diverged", "scf_oscillating", "Deadlock_Timeout"],
+      "first_check": "INCAR 参数合法性 + POTCAR 排序 + ulimit -s unlimited",
+      "rescue_protocol": "diagnostics.md VASP 五级救援协议",
+      "critical_files": ["WAVECAR", "CHGCAR", "CONTCAR", "OUTCAR", "OSZICAR"],
+      "do_not_delete": ["WAVECAR", "CHGCAR"]
+    },
+    "cp2k": {
+      "common_errors": ["oom_killed", "scf_diverged", "scf_oscillating", "Deadlock_Timeout"],
+      "first_check": "OT vs 对角化选择 + CUTOFF/REL_CUTOFF + 预条件器",
+      "rescue_protocol": "diagnostics.md CP2K OT/对角化决策树",
+      "critical_files": [".restart", ".wfn", "coord.xyz"],
+      "do_not_delete": [".restart", ".wfn"]
+    },
+    "lammps": {
+      "common_errors": ["oom_killed", "segfault", "Deadlock_Timeout"],
+      "first_check": "原子重叠 + timestep + pair_style/coeff 匹配",
+      "rescue_protocol": "diagnostics.md LAMMPS 排错",
+      "critical_files": ["data.*", "in.*", "log.lammps"],
+      "do_not_delete": []
+    },
+    "gaussian": {
+      "common_errors": ["scf_diverged", "oom_killed", "segfault", "generic_error"],
+      "first_check": "%Mem 限制 + SCF 算法 + 积分精度",
+      "rescue_protocol": "diagnostics.md Gaussian 排错",
+      "critical_files": [".chk"],
+      "do_not_delete": [".chk"]
+    },
+    "orca": {
+      "common_errors": ["scf_diverged", "oom_killed"],
+      "first_check": "%maxcore + grid 精度 + SCF 算法",
+      "rescue_protocol": "diagnostics.md ORCA 排错",
+      "critical_files": [".gbw"],
+      "do_not_delete": [".gbw"]
+    },
+    "castep": {
+      "common_errors": ["scf_diverged", "scf_oscillating"],
+      "first_check": "Fix Occupancy + Density Mixing + Smearing",
+      "rescue_protocol": "diagnostics.md CASTEP 四级救援协议",
+      "critical_files": [".check"],
+      "do_not_delete": [".check"]
+    }
+  },
+
+  "agent_query_guide": {
+    "by_error_type": "errors[?error_type == 'oom_killed']",
+    "by_code": "errors[?fixes[?contains(applies_to, 'vasp')]]",
+    "by_severity": "errors[?severity == 'critical']",
+    "by_confidence": "errors[?fixes[?confidence == 'HIGH']]",
+    "search": "grep-like search across symptoms, root_causes, fixes"
+  }
+}

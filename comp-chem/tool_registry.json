@@ -1,0 +1,267 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$description": "工具注册表 — Agent 可查询的工具清单，每个工具有标准化的输入/输出契约",
+  "version": "1.0.0",
+  "last_updated": "2026-06-08",
+
+  "tools": [
+    {
+      "name": "remote_ps",
+      "category": "hpc",
+      "description": "远程 Linux 服务器进程检查，输出结构化进程分类",
+      "command": "python <scripts_dir>/remote_ps.py --host <host> [options]",
+      "input_schema": {
+        "required": ["host"],
+        "optional": {
+          "port": {"type": "int", "default": 22, "description": "SSH 端口"},
+          "user": {"type": "str", "default": "root", "description": "SSH 用户名"},
+          "password": {"type": "str", "description": "SSH 密码（paramiko 模式）"},
+          "key_file": {"type": "str", "description": "SSH 私钥路径"},
+          "method": {"type": "str", "enum": ["paramiko", "ssh"], "default": "paramiko"},
+          "timeout": {"type": "int", "default": 30, "description": "连接超时秒数"},
+          "json": {"type": "bool", "description": "JSON 格式输出"},
+          "diagnose": {"type": "bool", "description": "自动诊断模式"}
+        }
+      },
+      "output": "进程分类报告：🟢 Computing / 🧟 Zombie / 🔴 High-load / ⚪ System",
+      "triggers": ["查看进程", "服务器上在跑什么", "确认计算是否还在运行", "kill 前检查"],
+      "pre_checks": ["需要 SSH 凭据"],
+      "side_effects": "只读，无副作用",
+      "examples": [
+        "python <scripts_dir>/remote_ps.py --host node01 --diagnose",
+        "python <scripts_dir>/remote_ps.py --host node01 --json"
+      ]
+    },
+    {
+      "name": "hpc_job",
+      "category": "hpc",
+      "description": "HPC 计算任务管理：提交/检查/终止/列出/查看日志",
+      "command": "python <scripts_dir>/hpc_job.py <action> [options]",
+      "input_schema": {
+        "required": ["host", "action"],
+        "optional": {
+          "port": {"type": "int", "default": 22},
+          "user": {"type": "str", "default": "root"},
+          "code": {"type": "str", "enum": ["vasp", "cp2k", "lammps", "gaussian", "orca", "qe", "gromacs"]},
+          "dir": {"type": "str", "description": "工作目录路径"},
+          "cmd": {"type": "str", "description": "运行命令（submit 时需要）"},
+          "cores": {"type": "int", "description": "核心数"},
+          "heartbeat": {"type": "int", "default": 900, "description": "心跳间隔（秒）"},
+          "walltime": {"type": "int", "default": 86400, "description": "最长运行时间（秒）"},
+          "tail": {"type": "int", "default": 50, "description": "日志尾部行数"},
+          "confirm": {"type": "bool", "description": "kill 时必须，确认终止操作"},
+          "diagnose": {"type": "bool", "description": "check 时自动诊断"}
+        }
+      },
+      "actions": ["upload", "submit", "check", "kill", "list", "logs"],
+      "output": "任务状态 JSON 或人类可读报告",
+      "triggers": ["提交计算", "检查任务", "终止任务", "查看日志", "hpc_job"],
+      "pre_checks": ["Pre-flight Check Gate 通过", "hpc_watcher.py 已部署到服务器"],
+      "side_effects": "submit/kill 修改远程状态",
+      "examples": [
+        "python <scripts_dir>/hpc_job.py upload --host node01",
+        "python <scripts_dir>/hpc_job.py submit --host node01 --code vasp --dir /home/user/calc --cmd 'mpirun -np 32 vasp_std' --cores 32",
+        "python <scripts_dir>/hpc_job.py check --host node01 --dir /home/user/calc --diagnose",
+        "python <scripts_dir>/hpc_job.py kill --host node01 --dir /home/user/calc --confirm"
+      ]
+    },
+    {
+      "name": "check_calc",
+      "category": "diagnostics",
+      "description": "计算化学输出文件解析：进度/收敛/错误诊断",
+      "command": "python <scripts_dir>/check_calc.py <file> [options]",
+      "input_schema": {
+        "required": ["file"],
+        "optional": {
+          "diagnose": {"type": "bool", "description": "错误诊断模式"},
+          "json": {"type": "bool", "description": "JSON 格式输出"}
+        }
+      },
+      "output": "进度报告 或 错误诊断 JSON",
+      "triggers": ["还要多久", "收敛了吗", "为什么报错", "进度如何", "OUTCAR", "OSZICAR", "cp2k.out", "log"],
+      "pre_checks": ["文件必须已下载到本地（远程文件走 4 步流程）"],
+      "side_effects": "只读",
+      "examples": [
+        "python <scripts_dir>/check_calc.py OUTCAR --diagnose",
+        "python <scripts_dir>/check_calc.py OUTCAR --json"
+      ]
+    },
+    {
+      "name": "query_errors",
+      "category": "diagnostics",
+      "description": "结构化错误知识库查询，精确检索诊断与修复方案",
+      "command": "python <scripts_dir>/query_errors.py [options]",
+      "input_schema": {
+        "optional": {
+          "type": {"type": "str", "description": "error_type 过滤"},
+          "code": {"type": "str", "description": "代码过滤 (vasp/cp2k/lammps/gaussian/orca/qe/castep)"},
+          "severity": {"type": "str", "enum": ["critical", "warning", "info"]},
+          "search": {"type": "str", "description": "关键词全文搜索"},
+          "suggest": {"type": "bool", "description": "输出修复建议"},
+          "min_confidence": {"type": "str", "enum": ["HIGH", "MEDIUM", "LOW"], "default": "MEDIUM"},
+          "json": {"type": "bool", "description": "JSON 输出（Agent 消费）"}
+        }
+      },
+      "output": "修复建议列表 或 JSON 结果集",
+      "triggers": ["报错", "不收敛", "诊断", "怎么修", "OOM", "segfault"],
+      "pre_checks": [],
+      "side_effects": "只读",
+      "examples": [
+        "python <scripts_dir>/query_errors.py --type oom_killed --code vasp --suggest",
+        "python <scripts_dir>/query_errors.py --search 'X11 死锁'",
+        "python <scripts_dir>/query_errors.py --type scf_diverged --json"
+      ]
+    },
+    {
+      "name": "hpc_watcher",
+      "category": "hpc",
+      "description": "服务器端计算任务守护进程：心跳监控/OOM检测/死锁识别/信号诊断",
+      "command": "python hpc_watcher.py <action> [options]  # 在服务器上执行",
+      "input_schema": {
+        "required": ["action"],
+        "optional": {
+          "dir": {"type": "str", "description": "工作目录"},
+          "cmd": {"type": "str", "description": "运行命令"},
+          "cores": {"type": "int", "description": "核心数"},
+          "heartbeat": {"type": "int", "default": 900, "description": "心跳间隔（秒）"},
+          "walltime": {"type": "int", "default": 86400}
+        }
+      },
+      "actions": ["submit", "status", "kill", "list", "cleanup"],
+      "output": "写入 .hpc_status.json",
+      "triggers": ["hpc_watcher", "守护进程", "任务监控"],
+      "pre_checks": ["上传到服务器", "chmod +x"],
+      "side_effects": "submit 启动计算进程"
+    },
+    {
+      "name": "websearch",
+      "category": "utility",
+      "description": "联网搜索 + 本地 URL 抓取（绕过 WebFetch 域名过滤）",
+      "command": "python <scripts_dir>/websearch.py \"<query>\" [options]",
+      "input_schema": {
+        "required": ["query"],
+        "optional": {
+          "count": {"type": "int", "default": 10, "description": "返回结果数"},
+          "json": {"type": "bool", "description": "JSON 格式"},
+          "fetch": {"type": "str", "description": "本地抓取 URL（替代 WebFetch）"},
+          "strip": {"type": "bool", "description": "去 HTML 标签输出纯文本"},
+          "html": {"type": "bool", "description": "保留原始 HTML"}
+        }
+      },
+      "output": "搜索结果列表 / 网页纯文本内容",
+      "triggers": ["搜索", "联网", "查一下", "最新", "2025", "2026"],
+      "pre_checks": [],
+      "side_effects": "网络请求，只读",
+      "examples": [
+        "python <scripts_dir>/websearch.py \"VASP 6.4 OOM fix\" --count 5",
+        "python <scripts_dir>/websearch.py --fetch \"https://vasp.at/wiki/ENCUT\" --strip"
+      ]
+    },
+    {
+      "name": "vision",
+      "category": "utility",
+      "description": "图片内容识别（调用外部视觉 API）",
+      "command": "node <scripts_dir>/vision.js \"<path>\" \"<prompt>\"",
+      "input_schema": {
+        "required": ["path", "prompt"],
+        "optional": {
+          "url": {"type": "bool", "description": "图片是网络 URL"}
+        }
+      },
+      "output": "图片文字描述",
+      "triggers": ["图片", "截图", "照片", ".png", ".jpg"],
+      "pre_checks": ["VISION_API_KEY 环境变量已设置"],
+      "side_effects": "网络 API 调用"
+    },
+    {
+      "name": "read_docx",
+      "category": "utility",
+      "description": "Word .docx 文档文本提取",
+      "command": "python <scripts_dir>/read_docx.py \"<file>\"",
+      "input_schema": {
+        "required": ["file"]
+      },
+      "output": "文档文本（保留标题层级）",
+      "triggers": [".docx", "Word 文档"],
+      "pre_checks": [],
+      "side_effects": "只读"
+    },
+    {
+      "name": "opju_extract",
+      "category": "utility",
+      "description": "Origin .opju 项目数据提取到 CSV",
+      "command": "python <scripts_dir>/opju_extract.py \"<file>\" [--csv]",
+      "input_schema": {
+        "required": ["file"],
+        "optional": {
+          "csv": {"type": "bool", "description": "导出 CSV 格式"}
+        }
+      },
+      "output": "Workbook 数据 / CSV 文件",
+      "triggers": [".opju", "Origin 数据"],
+      "pre_checks": ["本地安装 OriginPro", "pip install originpro pandas"],
+      "side_effects": "--csv 写入文件"
+    },
+    {
+      "name": "sci_colors",
+      "category": "utility",
+      "description": "SCI 论文配色方案预览与选择",
+      "command": "python <scripts_dir>/sci_colors.py [options]",
+      "input_schema": {
+        "optional": {
+          "show": {"type": "str", "description": "展示指定配色"},
+          "search": {"type": "str", "description": "关键词搜索"},
+          "code": {"type": "str", "description": "生成 Python 代码片段"},
+          "tag": {"type": "str", "description": "按标签过滤"}
+        }
+      },
+      "output": "终端 ANSI 颜色块预览",
+      "triggers": ["配色", "颜色", "SCI 颜色", "图表配色"],
+      "pre_checks": [],
+      "side_effects": "只读"
+    },
+    {
+      "name": "block_x11",
+      "category": "hpc",
+      "description": "LD_PRELOAD 拦截器：阻止 OpenMPI orted 的 X11 端口探测死锁",
+      "command": "LD_PRELOAD=/tmp/block_x11.so mpirun ...",
+      "input_schema": {
+        "required": [],
+        "optional": {}
+      },
+      "output": "无直接输出，使 mpirun 正常运行",
+      "triggers": ["OpenMPI", "orted", "mpirun 挂死", "Docker", "AutoDL"],
+      "pre_checks": ["确认使用 OpenMPI（非 MPICH）", "确认 Docker 环境", "block_x11.so 已编译"],
+      "side_effects": "仅拦截 X11 端口 connect()",
+      "setup": "gcc -shared -fPIC -o /tmp/block_x11.so <scripts_dir>/block_x11.c -ldl",
+      "examples": [
+        "LD_PRELOAD=/tmp/block_x11.so mpirun --allow-run-as-root -np 30 vasp_std"
+      ]
+    }
+  ],
+
+  "agent_usage": {
+    "discovery": "grep 'name' and 'description' to list available tools",
+    "by_category": "tools[?category == 'hpc']",
+    "by_trigger": "tools[?contains(triggers, '报错')]",
+    "get_input_schema": "tools[?name == 'hpc_job'].input_schema",
+    "dependency_check": "check pre_checks before invoking a tool"
+  },
+
+  "composition_patterns": {
+    "diagnose_calculation_failure": [
+      {"tool": "hpc_job", "action": "check", "purpose": "获取 hpc_status.json"},
+      {"tool": "check_calc", "action": "diagnose", "purpose": "分析输出文件"},
+      {"tool": "query_errors", "action": "suggest", "purpose": "检索修复方案"},
+      {"tool": "websearch", "action": "search", "purpose": "搜索社区已知方案"}
+    ],
+    "submit_calculation": [
+      {"tool": "remote_ps", "action": "diagnose", "purpose": "检查服务器负载"},
+      {"tool": "hpc_job", "action": "submit", "purpose": "提交任务"}
+    ],
+    "monitor_calculation": [
+      {"tool": "hpc_job", "action": "check", "purpose": "周期性"},
+      {"tool": "hpc_job", "action": "logs", "purpose": "查看实时输出"}
+    ]
+  }
+}

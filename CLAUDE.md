@@ -224,6 +224,23 @@ log、OUTCAR、OSZICAR、输出文件、check_calc、error_type、排错、诊�
 
 → **加载** `<config_dir>/comp-chem/diagnostics.md`
 
+### 结构化错误查询（域 2 子工具）
+
+命中域 2 触发词后，优先用结构化错误库检索，比全文 grep 更精确：
+
+```
+python <scripts_dir>/query_errors.py --type <error_type> --suggest
+python <scripts_dir>/query_errors.py --search "<关键词>"
+python <scripts_dir>/query_errors.py --type <error_type> --json  # Agent 消费
+```
+
+错误库位置：`<config_dir>/comp-chem/error_db.json`（11 种 error_type，65+ 修复方案）
+
+### 工具注册表
+
+所有脚本的标准接口定义在 `<config_dir>/comp-chem/tool_registry.json`，Agent 可用 `grep "name"` 发现工具、用 `input_schema` 了解参数契约。
+组合模式（`composition_patterns`）定义了多工具编排流程（诊断/提交/监控）。
+
 ## 域 3：深层排查（在域 2 不够用时）
 
 → **加载** `<config_dir>/comp-chem-sop.md`
@@ -287,6 +304,12 @@ log、OUTCAR、OSZICAR、输出文件、check_calc、error_type、排错、诊�
 - 错误报告用 `{error_type, suggestion, evidence}` 三元组
 - 进度报告用 `{status, elapsed, eta, last_activity}` 五元组
 - 参数修改用 `{param, old_value, new_value, reason}` 四元组
+
+**结构化基础设施**（大厂工程化标准）：
+- **错误知识库**：`comp-chem/error_db.json` — 11 种 error_type 的结构化诊断与修复方案
+- **工具注册表**：`comp-chem/tool_registry.json` — 10 个脚本的标准化接口定义（input_schema/output/triggers）
+- **任务数据库**：`comp-chem/job_schema.sql` — SQLite schema，支持历史查询/收敛预估/错误模式挖掘
+- **查询工具**：`scripts/query_errors.py` — 精确检索错误库，替代 grep 全文搜索
 
 ## 5. Cognitive Firewalls（认知防火墙）
 
