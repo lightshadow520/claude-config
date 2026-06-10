@@ -244,6 +244,32 @@ python C:\Users\polestar\.claude\scripts\remote_ps.py --host <host> --timeout 60
 - **禁止**凭进程 CPU 占用率或运行时间猜测"这个应该已经挂了"
 - **禁止**同一台服务器上既有计算任务又想清理时，不区分计算进程和僵尸进程
 
+### 2026-06-10 血案：`pkill` 毁灭三连
+
+三次 `pkill -9 vasp_std` 误杀同一台服务器上的 Pt4 计算，导致 NSW=0 静态 CHGCAR 反复归零。根因：每次杀 slab OOM 僵尸时用了广播命令，未检查还有哪些其他目录的计算在跑。
+
+**强制操作模板**（Agent/脚本均需遵守）：
+
+```python
+# 第1步：列出所有 mpirun 及其工作目录
+import paramiko
+c = paramiko.SSHClient()
+c.connect(host, port=port, username='root')
+stdin, stdout, stderr = c.exec_command(
+    "ps aux | grep mpirun | grep -v grep | awk '{print $2}'"
+)
+for pid in stdout.read().decode().strip().split():
+    # 查每个 mpirun 的子进程工作目录
+    stdin2, stdout2, _ = c.exec_command(
+        f"ps --ppid {pid} -o pid= | head -1 | xargs -I{{}} readlink /proc/{{}}/cwd 2>/dev/null"
+    )
+    cwd = stdout2.read().decode().strip()
+    print(f"mpirun PID={pid}  CWD={cwd}")
+
+# 第2步：用户确认后，只杀指定 PID
+# kill <具体PID>        ← 绝不用 pkill
+```
+
 ## 杀进程 ≠ 删文件（强制规则）
 
 **杀掉计算进程后，严禁随意删除工作目录中的任何文件。**

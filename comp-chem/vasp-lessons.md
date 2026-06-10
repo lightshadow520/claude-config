@@ -266,3 +266,54 @@ entering main loop                         # → 首步能量紧接中断前
 ```
 
 如果看到 `WAVECAR not read` → ISTART 没设或 WAVECAR 损坏。如果 `charge-density` 没出现 → ICHARG 没设或 CHGCAR 损坏。
+
+---
+
+## 十二、杀进程铁律（Agent 必读）
+
+**严禁 `pkill`、`killall`、`pkill -9` 等广播式杀进程命令。** 原因：无差别杀死所有同名进程，一条命令毁掉所有正在跑的计算。
+
+### 强制流程
+
+**第一步：列出所有进程及其用途**
+
+```bash
+# 列出每个 mpirun 及其子进程的工作目录
+for pid in $(pgrep mpirun 2>/dev/null || ps aux | grep mpirun | grep -v grep | awk '{print $2}'); do
+    children=$(ps --ppid $pid -o pid= 2>/dev/null | head -1)
+    cwd=$(readlink /proc/$children/cwd 2>/dev/null || echo "unknown")
+    cpu=$(ps -o time= -p $pid | tr -d ' ')
+    echo "mpirun PID=$pid CWD=$cwd CPU=$cpu"
+done
+```
+
+**第二步：输出表格让用户确认**
+
+```
+发现以下 VASP 进程：
+  mpirun PID=77588 CWD=/root/Pt4_cluster CPU=00:15:32 → Pt4 团簇计算
+  mpirun PID=65559 CWD=/root/FeBiSe3_slab CPU=1052:56 → FeBiSe3 slab 计算
+
+将要杀掉: PID=77588 (Pt4 团簇)
+保留:     PID=65559 (FeBiSe3 slab)
+确认? [y/n]
+```
+
+**第三步：精准杀，逐个核验**
+
+```bash
+kill <PID>           # 只杀这一个，SIGTERM
+# 确认已退出: ps -p <PID> 返回空
+```
+
+### 铁律
+
+| 禁止 | 原因 | 正确做法 |
+|------|------|---------|
+| `pkill vasp_std` | 杀掉所有目录的所有计算 | `kill <具体PID>` |
+| `killall mpirun` | 同上 | `kill <具体PID>` |
+| `pkill -9` | 跳过 MPI_Finalize，CHGCAR=0 | 永不用 -9 |
+| 不查 CWD 就杀 | 可能杀掉正在跑的重要计算 | 先 `readlink /proc/$PID/cwd` |
+| 看名字就杀 | 不同目录的同名进程互不相干 | 先列全表，确认后再动手 |
+
+此规则适用于所有 Agent、所有脚本、所有操作人员。违反一次即可能造成数天计算进度的损失。
