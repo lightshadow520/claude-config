@@ -545,6 +545,180 @@
       ],
       "cross_references": ["aborted", "scf_diverged"],
       "source": "diagnostics.md"
+    },
+    {
+      "error_type": "mpi_host_deadlock",
+      "severity": "critical",
+      "symptoms": [
+        "mpirun 永远挂死，不产生任何输出",
+        "进程停留在 S 状态，timeout + SIGKILL 也无法清理",
+        "strace 显示 orted 在 connect(127.0.0.1:600X) 后 poll() 永不返回（OpenMPI X11 死锁）",
+        "或：mpiexec -np 1 hostname 秒过，但 mpiexec -np 1 vasp_std 挂死（MPICH Hydra launcher 问题）",
+        "hydra_pmi_proxy 进程参数显示 --launcher ssh 而非 --launcher fork"
+      ],
+      "diagnostic_checks": [
+        "mpirun --version 确认 MPI 实现（OpenMPI vs MPICH）",
+        "test -f /.dockerenv 确认 Docker 环境",
+        "strace -f mpirun -np 1 hostname | grep 'connect.*600[0-9]' 确认 X11 死锁",
+        "ps aux | grep hydra_pmi_proxy | grep 'launcher ssh' 确认 MPICH launcher 问题",
+        "df -h /dev/shm 检查共享内存（应 ≥ 1GB）"
+      ],
+      "root_causes": [
+        {"cause": "OpenMPI orted 启动时强制探测 X11 端口（6000-6063），Docker NAT 将 6007 转发到 VNC，TCP 建立但 X11 协议不回包", "likelihood": "high"},
+        {"cause": "MPICH Hydra 在部分 Docker 实例上默认使用 SSH launcher 而非 fork launcher，SSH 握手失败", "likelihood": "medium"},
+        {"cause": "MPICH PMI 握手在受限 Docker 网络命名空间中失败", "likelihood": "medium"},
+        {"cause": "MPI 库 SONAME 不兼容（libmpich.so vs libmpi.so）导致跨实现运行失败", "likelihood": "low"}
+      ],
+      "fixes": [
+        {
+          "action": "换用 MPICH（首选 — 无 X11 探测）",
+          "params": {},
+          "confidence": "HIGH",
+          "applies_to": ["vasp", "cp2k", "lammps", "gaussian", "orca", "qe"],
+          "side_effects": "需重新编译 VASP 链接 MPICH；部分实例上 MPICH 也可能失败",
+          "validation": "mpirun -np 4 hostname 应秒过"
+        },
+        {
+          "action": "OpenMPI + LD_PRELOAD block_x11.so（最终兜底 — 已验证所有场景有效）",
+          "params": {"LD_PRELOAD": "/tmp/block_x11.so", "OMP_NUM_THREADS": 1},
+          "confidence": "HIGH",
+          "applies_to": ["vasp", "cp2k", "lammps", "gaussian", "orca", "qe"],
+          "side_effects": "仅拦截 X11 connect()，不影响计算",
+          "validation": "mpirun --allow-run-as-root -np 30 vasp_std 正常启动"
+        },
+        {
+          "action": "MPICH 显式指定 fork launcher",
+          "params": {"launcher": "fork"},
+          "confidence": "LOW",
+          "applies_to": ["vasp", "cp2k", "lammps"],
+          "side_effects": "在受限 Docker 中仍可能 PMI 握手失败",
+          "validation": "hydra_pmi_proxy --launcher fork 确认生效"
+        }
+      ],
+      "failure_history": [
+        {"attempt": 1, "solution": "换 MPICH（apt 安装）", "result": "hostname 能跑但 MPI_Init 挂", "lesson": "MPICH Hydra 默认在某些 Docker 上用 SSH launcher"},
+        {"attempt": 2, "solution": "显式 -launcher fork", "result": "仍挂，PMI 握手失败", "lesson": "PMI 握手也有问题，与 X11 无关"},
+        {"attempt": 3, "solution": "Intel MPI mpirun 跑 MPICH 编译的二进制", "result": "SONAME 不兼容", "lesson": "libmpich.so.12 ≠ libmpi.so.12"},
+        {"attempt": 4, "solution": "重回 OpenMPI + LD_PRELOAD", "result": "成功", "lesson": "block_x11.so 是最可靠兜底方案"}
+      ],
+      "cross_references": ["Deadlock_Timeout", "docker_process_cleanup"],
+      "source": "2026-06-08 AutoDL bjb1 实例现场诊断"
+    },
+    {
+      "error_type": "docker_process_cleanup",
+      "severity": "warning",
+      "symptoms": [
+        "killall -9 vasp_std 不报错但进程全部残留",
+        "ps aux 显示大量进程仍在 Ss/Rl 状态",
+        "多次重试后累积大量僵尸进程（可达 100+）",
+        "paramiko exec_command 逐 PID kill 后 SSH 连接断开（服务器短暂不可达）"
+      ],
+      "diagnostic_checks": [
+        "ps aux | grep -E 'vasp|mpirun|orted' | wc -l 统计残留进程数",
+        "ps -eo pid,comm --no-headers | grep -E 'vasp|mpirun|orted' 确认 PID",
+        "检查同一工作目录是否被多个 mpirun 实例写入（OUTCAR 可能损坏）"
+      ],
+      "root_causes": [
+        {"cause": "killall 在 Docker 容器内匹配进程名时因路径/参数差异失败", "likelihood": "high"},
+        {"cause": "mpirun/orted 在 poll() 中等待 X11 响应，SIGTERM 被信号处理器捕获后重新进入 poll()", "likelihood": "high"},
+        {"cause": "大量测试失败后无人清理，累积效应", "likelihood": "high"}
+      ],
+      "fixes": [
+        {
+          "action": "用 paramiko 逐 PID 发 kill -9（不依赖 shell 管道和 killall）",
+          "params": {},
+          "confidence": "HIGH",
+          "applies_to": ["vasp", "cp2k", "lammps", "gaussian", "orca", "qe"],
+          "side_effects": "SSH 连接可能短暂断开（服务器负载瞬间释放）",
+          "validation": "清理后 ps aux | grep -E 'vasp|mpirun|orted' | wc -l 应为 0"
+        },
+        {
+          "action": "pkill -9 直接按进程名杀（比 killall 可靠）",
+          "params": {},
+          "confidence": "MEDIUM",
+          "applies_to": ["vasp", "cp2k", "lammps"],
+          "side_effects": "pkill 在 Docker 内比 killall 更可靠",
+          "validation": "确认目标进程全部消失"
+        }
+      ],
+      "cross_references": ["mpi_host_deadlock", "Deadlock_Timeout"],
+      "source": "2026-06-08 AutoDL westb 实例 — 31 个残留进程清理"
+    },
+    {
+      "error_type": "vasp_build_failure",
+      "severity": "warning",
+      "symptoms": [
+        "make 编译时 Fatal Error: Cannot open module file 'string.mod' / 'base.mod' / 'prec.mod'",
+        "Error: Symbol 'linuxgnu' at (1) has no IMPLICIT type",
+        "Error: Symbol 'omp_lock_kind' at (1) has no IMPLICIT type",
+        "只有 std 编译成功，gam/ncl 失败（或反之）",
+        "预处理器 -DHOST=\"xxx\" 的引号被 shell 吃掉，导致 C 宏定义变成未加引号的标识符"
+      ],
+      "diagnostic_checks": [
+        "检查 make 是否用了 -j（并行编译），模块文件 (.mod) 是否因竞争条件未生成",
+        "grep CPP_OPTIONS makefile.include 检查 -DHOST 引号转义",
+        "检查是否误用 -fopenmp 但源码中 omp_lib 未被正确 use",
+        "grep 'linuxgnu' build/*/ini.f90 确认预处理是否正常",
+        "gcc -E -C -w src/ini.F <CPP_FLAGS> 手动验证预处理输出"
+      ],
+      "root_causes": [
+        {"cause": "并行编译 (-jN) 导致 Fortran 模块文件 (.mod) 未按依赖顺序生成", "likelihood": "high"},
+        {"cause": "makefile.include 中 -DHOST=\\\"xxx\\\" 的引号经 make → shell → gcc 三层传递后被吃掉", "likelihood": "high"},
+        {"cause": "串行编译中误加 -fopenmp 但源码中 omp_lib 模块的条件编译未正确处理", "likelihood": "medium"},
+        {"cause": "makefile.include 缺少 $(FUFFIX)/$(SUFFIX) 变量定义（应由 src/makefile 提供）", "likelihood": "low"},
+        {"cause": "build/ 目录未清理干净，残留上次编译的 .o 文件", "likelihood": "medium"}
+      ],
+      "fixes": [
+        {
+          "action": "使用 make DEPS=1 -j4 而非 make -j16（先生成依赖再并行）",
+          "params": {"DEPS": 1, "j": 4},
+          "confidence": "HIGH",
+          "applies_to": ["vasp"],
+          "side_effects": "DEPS=1 先串行生成依赖关系，消除模块竞争条件",
+          "validation": "所有 .mod 文件按正确顺序生成，不再出现 Cannot open module file"
+        },
+        {
+          "action": "去掉 makefile.include 中的 -DHOST 定义，让源码 fallback 使用 \"unknown\"",
+          "params": {"CPP_OPTIONS": "移除 -DHOST=\"LinuxGNU\"，保留其余定义"},
+          "confidence": "HIGH",
+          "applies_to": ["vasp"],
+          "side_effects": "OUTCAR 头中 executed on 显示 'unknown'，不影响计算",
+          "validation": "预处理输出中 HOST 为字符串 \"unknown\" 而非未加引号的标识符"
+        },
+        {
+          "action": "串行编译中不加 -fopenmp（VASP 串行版 OpenMP 支持需要额外适配）",
+          "params": {"FFLAGS": "不含 -fopenmp", "OFLAG": "不含 -fopenmp", "FCL": "不含 -fopenmp"},
+          "confidence": "MEDIUM",
+          "applies_to": ["vasp"],
+          "side_effects": "纯串行执行，无法利用 OpenMP 多线程",
+          "validation": "fock_glb.F 中 OMP_LOCK_KIND 不再报错"
+        },
+        {
+          "action": "编译前确保 rm -rf build 清理干净",
+          "params": {},
+          "confidence": "HIGH",
+          "applies_to": ["vasp"],
+          "side_effects": "每次全量重编译，耗时较长",
+          "validation": "make 前确认 build/ 目录不存在或为空"
+        },
+        {
+          "action": "SFTP put 上传 makefile.include 而非通过 shell heredoc 写入",
+          "params": {},
+          "confidence": "MEDIUM",
+          "applies_to": ["vasp"],
+          "side_effects": "避免 shell 变量展开污染 makefile 内容",
+          "validation": "SFTP 读回文件内容与本地一致"
+        }
+      ],
+      "failure_history": [
+        {"attempt": 1, "solution": "make -j16 并行编译", "result": "string.mod / base.mod 找不到", "lesson": "Fortran 模块依赖无法靠 -j16 自动处理"},
+        {"attempt": 2, "solution": "make DEPS=1 -j8", "result": "成功（MPICH 版）", "lesson": "DEPS=1 先生成依赖再编译解决模块顺序"},
+        {"attempt": 3, "solution": "串行版 + -fopenmp", "result": "OMP_LOCK_KIND 未定义", "lesson": "VASP 串行版 OpenMP 需要额外适配"},
+        {"attempt": 4, "solution": "串行版 -fopenmp + 去掉 -DHOST", "result": "linuxgnu 错误", "lesson": "引号经 make→shell→gcc 三层被吃掉"},
+        {"attempt": 5, "solution": "去掉 -DHOST，用 OpenMPI mpif90.openmpi + DEPS=1", "result": "成功", "lesson": "去掉 -DHOST 是最简单的避坑法"}
+      ],
+      "cross_references": ["mpi_host_deadlock"],
+      "source": "2026-06-08 AutoDL bjb1 实例 — VASP 6.4.3 编译：5 次重试才成功"
     }
   ],
 

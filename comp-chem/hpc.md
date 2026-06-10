@@ -99,7 +99,7 @@ mpirun -np 30 vasp_std         # VASP 多进程并行
 
 如果不能/不想换 MPICH，用 `block_x11.so` 拦截 X11 端口连接。
 
-脚本位置：`<scripts_dir>/block_x11.c`
+脚本位置：`C:\Users\polestar\.claude\scripts\block_x11.c`
 
 ```bash
 # 1. 上传并编译（服务器上）
@@ -115,21 +115,78 @@ mpirun --allow-run-as-root -np $NPROCS vasp_std
 
 **原理**：拦截对 `127.0.0.1:6000-6063` 的 `connect()` 调用，直接返回 `ECONNREFUSED`。orted 探测一圈全被拒，100ms 内跳过，继续正常 MPI 初始化。
 
-## 提交前检查清单（AutoDL Docker 环境）
+## 提交前检查清单（AutoLDocker 环境）
 
-每次在新服务器上首次提交计算前：
+**铁律：每次通过 SSH 连接到远程服务器，提交任何计算之前，必须先跑以下环境探测。
+不论用户是否提到 Docker/AutoDL/MPI —— 只要走了 SSH 连接，这一条就自动触发。**
 
 ```
-[ ] mpirun -np 1 hostname          # 单进程 MPI 能跑
-[ ] mpirun -np 4 hostname          # 多进程 MPI 能跑
-[ ] mpirun --version               # 确认 MPI 实现（优先 MPICH）
-[ ] test -f /.dockerenv            # 确认是否 Docker 环境
-[ ] df -h /dev/shm                 # 共享内存 ≥ 1GB
-[ ] ulimit -s unlimited            # 栈空间无限制
-[ ] vasp_std 能启动并输出 "No INCAR found"（验证 MPI+二进制正常）
+# 第一步：环境探测（SSH 连接后立即执行，不依赖用户关键词）
+[ ] cat /proc/1/cgroup | head -1          # 确认容器类型
+[ ] test -f /.dockerenv && echo "Docker" || echo "非Docker"
+[ ] mpirun --version 2>&1 | head -2       # 确认 MPI 实现（OpenMPI vs MPICH）
+[ ] df -h /dev/shm                         # 共享内存大小
+[ ] ulimit -s                              # 栈空间（需 unlimited）
+
+# 第二步：MPI 可用性验证
+[ ] mpirun -np 1 hostname                  # 单进程 MPI 能跑
+[ ] mpirun -np 4 hostname                  # 多进程 MPI 能跑
+
+# 第三步：代码二进制验证
+[ ] vasp_std 能启动并输出 "No INCAR found"（或对应代码的等效测试）
+
+# 第四步：如果任何一步失败 → 立即查 error_db.json
+python <scripts_dir>/query_errors.py --search "<失败症状>"
 ```
 
-**铁律**：Docker 环境 + OpenMPI = 必须先做 `mpirun -np 1 hostname` 测试。如果挂死，直接走 MPICH 方案或 LD_PRELOAD 方案，不要反复调 MCA 参数（`--mca orte_forwarder_threshold 0`、`--mca plm isolated` 等均无效——X11 探测在 MCA 初始化之前执行）。
+**Docker + OpenMPI 组合 → 立即预判 X11 死锁**：检查清单中 `mpirun -np 1 hostname` 挂死 + Docker 环境 + OpenMPI → 直接走 LD_PRELOAD 方案，不要浪费时间试 MCA 参数。
+
+### 经验 2026-06-08：MPICH 可能在部分 AutoDL 实例上也失败
+
+**识别特征**：`apt install mpich` 后 `mpiexec -np 1 hostname` 秒过，但 `mpiexec -np 1 vasp_std` 挂死，进程全在 Ss 状态。`hydra_pmi_proxy` 进程参数中显示 `--launcher ssh` 而非 `--launcher fork`。
+
+| 第 N 次 | 尝试方案 | 失败表现 | 学到什么 |
+|---------|---------|---------|---------|
+| 1 | 换 MPICH（apt 安装）| `hostname` 能跑但 `mpitest`(调用 MPI_Init)挂 | MPICH Hydra 默认在某些 Docker 上用 SSH launcher |
+| 2 | 显式 `-launcher fork` | 仍挂，hydra_pmi_proxy 用了 fork 但 PMI 握手失败 | PMI 握手也有问题，不是仅 X11 |
+| 3 | Intel MPI mpirun 跑 MPICH 编译的二进制 | 进程被 timeout 杀，无输出 | SONAME 不兼容(libmpich.so.12 vs libmpi.so.12) |
+| 4 | 重回 OpenMPI + LD_PRELOAD | **成功**，30 核 VASP 全速跑 | block_x11.so 是最可靠的兜底方案 |
+
+**成功方案**（当 MPICH 也失败时）：
+
+```bash
+# 1. 上传并编译 block_x11.so
+gcc -shared -fPIC -o /tmp/block_x11.so block_x11.c -ldl
+
+# 2. 编译 VASP 时注意去掉 -DHOST 定义（避免 shell 引号问题）
+# makefile.include 中 CPP_OPTIONS 不加 -DHOST
+
+# 3. run_vasp.sh
+export LD_PRELOAD=/tmp/block_x11.so
+ulimit -s unlimited
+export OMP_NUM_THREADS=1
+mpirun.openmpi --allow-run-as-root -np $NPROCS vasp_std
+```
+
+**适用范围**：Docker 容器 + 任何 MPI 实现都失败时，OpenMPI + LD_PRELOAD 是最终兜底。
+
+### 经验 2026-06-08：Docker 容器内进程清理
+
+**识别特征**：`killall -9 vasp_std` 不报错但进程全部残留，`ps aux` 显示进程仍在 Ss/Rl 状态。
+
+**根因**：`killall` 在 Docker 容器内匹配进程名时可能因路径差异失败；多次失败重试累积大量僵尸进程（本案例累积 124 个）。
+
+**正确清理方法**：用 paramiko 逐 PID 发 `kill -9`，绕过 shell 转义问题：
+
+```python
+# 不要用 shell 管道，逐 PID 发信号
+stdin, stdout, stderr = ssh.exec_command('ps -eo pid,comm --no-headers | grep -E "vasp|mpirun|orted"', timeout=10)
+for line in stdout.read().decode().strip().split('\n'):
+    pid = line.strip().split()[0]
+    ssh.exec_command(f'kill -9 {pid} 2>/dev/null', timeout=3)
+```
+
+**警告**：多个 mpirun 实例同时写同一工作目录会互相覆盖 OUTCAR/OSZICAR。重启前必须确认旧进程已全部清理。
 
 ---
 
@@ -145,12 +202,12 @@ mpirun --allow-run-as-root -np $NPROCS vasp_std
 ## 查看进程
 
 ```
-python <scripts_dir>/remote_ps.py --host <host>                        # 结构化概览
-python <scripts_dir>/remote_ps.py --host <host> --diagnose             # 概览 + 自动诊断
-python <scripts_dir>/remote_ps.py --host <host> --json                 # 结构化 JSON
-python <scripts_dir>/remote_ps.py --host <host> --port <port> --user <user>
-python <scripts_dir>/remote_ps.py --host <host> --method ssh           # 用系统 SSH
-python <scripts_dir>/remote_ps.py --host <host> --timeout 60           # 长超时
+python C:\Users\polestar\.claude\scripts\remote_ps.py --host <host>                        # 结构化概览
+python C:\Users\polestar\.claude\scripts\remote_ps.py --host <host> --diagnose             # 概览 + 自动诊断
+python C:\Users\polestar\.claude\scripts\remote_ps.py --host <host> --json                 # 结构化 JSON
+python C:\Users\polestar\.claude\scripts\remote_ps.py --host <host> --port <port> --user <user>
+python C:\Users\polestar\.claude\scripts\remote_ps.py --host <host> --method ssh           # 用系统 SSH
+python C:\Users\polestar\.claude\scripts\remote_ps.py --host <host> --timeout 60           # 长超时
 ```
 
 ### 输出分组
@@ -231,13 +288,13 @@ AI (Claude)
 ## 首次部署
 
 ```
-python <scripts_dir>/hpc_job.py upload --host <host> --port <port>
+python C:\Users\polestar\.claude\scripts\hpc_job.py upload --host <host> --port <port>
 ```
 
 ## 提交计算任务
 
 ```
-python <scripts_dir>/hpc_job.py submit \
+python C:\Users\polestar\.claude\scripts\hpc_job.py submit \
     --host <host> --code vasp \
     --dir /home/user/calc/Ni-111 \
     --cmd "mpirun -np 32 vasp_std" \
@@ -249,19 +306,19 @@ python <scripts_dir>/hpc_job.py submit \
 ## 检查任务状态
 
 ```
-python <scripts_dir>/hpc_job.py check --host <host> --dir /path --diagnose
-python <scripts_dir>/hpc_job.py list --host <host>
-python <scripts_dir>/hpc_job.py logs --host <host> --dir /path --tail 50
+python C:\Users\polestar\.claude\scripts\hpc_job.py check --host <host> --dir /path --diagnose
+python C:\Users\polestar\.claude\scripts\hpc_job.py list --host <host>
+python C:\Users\polestar\.claude\scripts\hpc_job.py logs --host <host> --dir /path --tail 50
 ```
 
 ## 终止任务（强制审批）
 
 ```
 # 第一步：查看状态（不带 --confirm，不会杀）
-python <scripts_dir>/hpc_job.py kill --host <host> --dir /path
+python C:\Users\polestar\.claude\scripts\hpc_job.py kill --host <host> --dir /path
 
 # 第二步：用户确认后
-python <scripts_dir>/hpc_job.py kill --host <host> --dir /path --confirm
+python C:\Users\polestar\.claude\scripts\hpc_job.py kill --host <host> --dir /path --confirm
 ```
 
 ## 严禁行为
@@ -450,39 +507,58 @@ hpc_job.py submit \
   │
   ├─ Step 3: 询问用户 → 等确认
   │
-  └─ Step 4: 写入，格式如下：
+  └─ Step 4: 写入，优先写入结构化数据库
 ```
 
-### 写入模板
+### 写入目标优先级
+
+**铁律：结构化数据库 > MD 文件。先写 `error_db.json`，需要详细叙述时再补 MD。**
+
+| 优先级 | 目标 | 何时用 |
+|--------|------|--------|
+| **1st** | `comp-chem/error_db.json` | 所有计算报错、HPC 环境坑、进程管理问题 → 追加新 error_type 或扩展现有条目 |
+| 2nd | `comp-chem/hpc.md` 对应段落 | 需要详细诊断步骤、命令示例、较长说明时补充 |
+| 3rd | `memory/<topic>.md` | 与计算无关的跨领域通用教训 |
+
+### error_db.json 写入格式
+
+```json
+{
+  "error_type": "<snake_case>",
+  "severity": "critical|warning|info",
+  "symptoms": ["<可 grep 的特征>"],
+  "diagnostic_checks": ["<确认命令>"],
+  "root_causes": [{"cause": "...", "likelihood": "high|medium|low"}],
+  "fixes": [{
+    "action": "<一句话>",
+    "params": {"PARAM": "value"},
+    "confidence": "HIGH|MEDIUM|LOW",
+    "applies_to": ["vasp","cp2k",...],
+    "side_effects": "...",
+    "validation": "..."
+  }],
+  "failure_history": [
+    {"attempt": 1, "solution": "...", "result": "...", "lesson": "..."}
+  ],
+  "cross_references": ["<相关 error_type>"],
+  "source": "<日期 + 服务器>"
+}
+```
+
+### MD 补充格式（仅在需要详细叙述时用）
 
 ```markdown
-## 问题：[一句话描述]
-
 **识别特征**：[以后遇到什么症状就想到这条规则]
 
 **失败历史**：
 | 第 N 次 | 尝试方案 | 失败表现 | 学到什么 |
 |---------|---------|---------|---------|
 | 1 | [方案] | [错误] | [教训] |
-| 2 | [方案] | [错误] | [教训] |
-| 3 | [方案] | [错误] | [教训] |
 
 **成功方案**：[具体步骤，可复现]
-
 **为什么这次能绕开**：[根因分析]
-
 **适用范围**：[哪些代码/场景适用，哪些不适用]
 ```
-
-### 文件放置规则
-
-| 问题范围 | 写入位置 |
-|---------|---------|
-| 仅涉及某个代码的参数调优 | `comp-chem/diagnostics.md` 对应代码段落 |
-| 涉及 HPC/服务器/SSH 操作 | `comp-chem/hpc.md` 对应策略段落 |
-| 跨代码的通用坑（如 MPI 版本） | `comp-chem/hpc.md` 环境初始化段落后 |
-| 全新的独立主题 | 新建 `comp-chem/<topic>.md` + 在 CLAUDE.md 加触发词 |
-| 与计算无关的经验 | `memory/<topic>.md` + 更新 MEMORY.md 索引 |
 
 ### 禁止行为
 
@@ -490,10 +566,11 @@ hpc_job.py submit \
 - **禁止** 把假成功当真成功写入规则
 - **禁止** 写入未经验证复现的方案
 - **禁止** 把规则写在根 CLAUDE.md（根级只放触发条件）
+- **禁止** 只写 MD 不写 error_db.json（结构化数据库是主数据源，MD 是补充）
 
 ## S7: Deep Retrospective（深度项目复盘）
 
-**通用框架见** `<config_dir>/deep-retrospect.md`。
+**通用框架见** `C:\Users\polestar\.claude\deep-retrospect.md`。
 首次触发时先加载通用框架，再回到本文件查看 HPC/服务器 特有补充。
 
 ### HPC/服务器领域特有检查项
@@ -515,6 +592,6 @@ hpc_job.py submit \
 
 **联网搜索（HPC 专项）**：
 ```
-python <scripts_dir>/websearch.py "<代码名> <error_type> known fix server environment"
-python <scripts_dir>/websearch.py "MPI <版本> <代码名> bug crash"
+python C:\Users\polestar\.claude\scripts\websearch.py "<代码名> <error_type> known fix server environment"
+python C:\Users\polestar\.claude\scripts\websearch.py "MPI <版本> <代码名> bug crash"
 ```
