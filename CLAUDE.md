@@ -3,7 +3,7 @@
 你的底层模型不具备原生识图能力。遇到图片时，**不要用 Read 工具看图片**，改用 vision.js：
 
 ```
-node <scripts_dir>/vision.js "<图片路径>" "用中文描述这张图片"
+node C:\Users\polestar\.claude\scripts\vision.js "<图片路径>" "用中文描述这张图片"
 ```
 
 ## 触发场景
@@ -13,7 +13,7 @@ node <scripts_dir>/vision.js "<图片路径>" "用中文描述这张图片"
 - 用户要求分析、描述、识别图片内容
 - **重要**：对于网络图片 URL，使用 `--url` 参数：
   ```
-  node <scripts_dir>/vision.js --url "<图片URL>" "用中文描述这张图片"
+  node C:\Users\polestar\.claude\scripts\vision.js --url "<图片URL>" "用中文描述这张图片"
   ```
 
 ## 注意事项
@@ -27,7 +27,7 @@ node <scripts_dir>/vision.js "<图片路径>" "用中文描述这张图片"
 你的底层模型不具备原生联网能力。需要联网搜索时，使用 websearch.py：
 
 ```
-python <scripts_dir>/websearch.py "<搜索关键词>" --count N
+python C:\Users\polestar\.claude\scripts\websearch.py "<搜索关键词>" --count N
 ```
 
 - `--count N` 控制返回结果数，默认 10
@@ -55,7 +55,7 @@ python <scripts_dir>/websearch.py "<搜索关键词>" --count N
 遇到 `Error: Unable to verify if domain X is safe to fetch` 时，立即降级为本地抓取：
 
 ```
-python <scripts_dir>/websearch.py --fetch "<URL>" --strip
+python C:\Users\polestar\.claude\scripts\websearch.py --fetch "<URL>" --strip
 ```
 
 - `--strip` 去除 HTML 标签输出纯文本（推荐，token 友好）
@@ -70,7 +70,7 @@ python <scripts_dir>/websearch.py --fetch "<URL>" --strip
 你的底层模型不具备原生阅读 Word 文档的能力。遇到 `.docx` 文件时，**不要用 Read 工具直接读取**，改用 read_docx.py：
 
 ```
-python <scripts_dir>/read_docx.py "<文件路径>"
+python C:\Users\polestar\.claude\scripts\read_docx.py "<文件路径>"
 ```
 
 ## 触发场景
@@ -90,8 +90,8 @@ python <scripts_dir>/read_docx.py "<文件路径>"
 你的底层模型不具备原生读取 Origin `.opju` 文件的能力。遇到 `.opju` 文件时，**不要用 Read 工具直接读取**，改用 opju_extract.py：
 
 ```
-python <scripts_dir>/opju_extract.py "<文件路径>"          # 查看内容
-python <scripts_dir>/opju_extract.py "<文件路径>" --csv    # 导出 CSV
+python C:\Users\polestar\.claude\scripts\opju_extract.py "<文件路径>"          # 查看内容
+python C:\Users\polestar\.claude\scripts\opju_extract.py "<文件路径>" --csv    # 导出 CSV
 ```
 
 也可以直接用 `originpro` 库在 Python 代码中提取（详见 opju-extract skill）。
@@ -140,11 +140,11 @@ python <scripts_dir>/opju_extract.py "<文件路径>" --csv    # 导出 CSV
 For scientific color schemes, use sci_colors.py — pure terminal ANSI, no PNG needed:
 
 ```
-python <scripts_dir>/sci_colors.py                              # overview (55 palettes, grouped)
-python <scripts_dir>/sci_colors.py --show "<name>"              # detail: large blocks + hex
-python <scripts_dir>/sci_colors.py --search "<keyword>"         # search by keyword
-python <scripts_dir>/sci_colors.py --code "<name>"              # copy-paste Python snippet
-python <scripts_dir>/sci_colors.py --tag "<tag>"                # filter by tag
+python C:\Users\polestar\.claude\scripts\sci_colors.py                              # overview (55 palettes, grouped)
+python C:\Users\polestar\.claude\scripts\sci_colors.py --show "<name>"              # detail: large blocks + hex
+python C:\Users\polestar\.claude\scripts\sci_colors.py --search "<keyword>"         # search by keyword
+python C:\Users\polestar\.claude\scripts\sci_colors.py --code "<name>"              # copy-paste Python snippet
+python C:\Users\polestar\.claude\scripts\sci_colors.py --tag "<tag>"                # filter by tag
 ```
 
 See sci-color skill for detailed guidance. Show terminal output directly — never generate PNG files for color preview.
@@ -200,6 +200,19 @@ See sci-color skill for detailed guidance. Show terminal output directly — nev
 - 每个 `agent()` 任务描述要具体（指定工具、文件路径、预期输出）
 - 加上验证步骤（agent 跑完检查结果完整性）
 
+### 计算化学 HPC 工作流专属触发
+
+以下场景**必须主动建议**用户使用 `/workflow hpc-submit.js`，不能默默手动操作：
+
+- 用户要提交任何计算任务到远程服务器（VASP/CP2K/LAMMPS/Gaussian/ORCA/QE/CASTEP/GROMACS/AMBER）
+- 用户说"帮我跑"、"提交计算"、"跑个XX"、"算一下"、"上去跑"
+- 用户需要审核输入文件后再提交
+- 用户提交后需要监控进度
+
+**建议话术**：「这个任务可以用 hpc-submit 工作流——环境探测→输入审查→提交→四线监控，要不要用 `/workflow hpc-submit.js`？」
+
+如果用户拒绝，再用传统方式手动执行。
+
 # 计算化学与 HPC（条件加载）
 
 下面两个领域文件按需加载，避免每次对话都占 token。
@@ -211,9 +224,13 @@ See sci-color skill for detailed guidance. Show terminal output directly — nev
 SSH、远程服务器、host、mpirun、vasp_std、cp2k、lammps、gaussian、orca、
 nohup、提交计算、查看进程、kill 进程、服务器进程、hpc_job、hpc_watcher、
 remote_ps、连接超时、服务器负载、queue、作业调度、autodl、AutoDL、
-docker、Docker、容器、GPUshare、多线程加速、MPICH、OpenMPI
+docker、Docker、容器、GPUshare、多线程加速、MPICH、OpenMPI、
+帮我跑、跑一下、跑个、连上、连接一下、上服务器、提交任务、计算任务、
+paramiko、sftp、scp、上传到服务器、下载输出
 
-→ **加载** `<config_dir>/comp-chem/hpc.md`
+**兜底规则**：即使以上关键词均未命中，只要 Agent 计划通过 SSH/paramiko 连接远程服务器执行计算任务，必须在 `connect()` 之前主动加载 `hpc.md` 并执行环境探测（`mpirun --version` + `test -f /.dockerenv`）。
+
+→ **加载** `C:\Users\polestar\.claude\comp-chem\hpc.md`
 
 ## 域 2：计算报错 & 诊断
 
@@ -222,28 +239,28 @@ docker、Docker、容器、GPUshare、多线程加速、MPICH、OpenMPI
 FEWALD、SCF、几何优化、还要多久、什么时候跑完、预估时间、进度如何、
 log、OUTCAR、OSZICAR、输出文件、check_calc、error_type、排错、诊断、诊断
 
-→ **加载** `<config_dir>/comp-chem/diagnostics.md`
+→ **加载** `C:\Users\polestar\.claude\comp-chem\diagnostics.md`
 
 ### 结构化错误查询（域 2 子工具）
 
 命中域 2 触发词后，优先用结构化错误库检索，比全文 grep 更精确：
 
 ```
-python <scripts_dir>/query_errors.py --type <error_type> --suggest
-python <scripts_dir>/query_errors.py --search "<关键词>"
-python <scripts_dir>/query_errors.py --type <error_type> --json  # Agent 消费
+python C:\Users\polestar\.claude\scripts\query_errors.py --type <error_type> --suggest
+python C:\Users\polestar\.claude\scripts\query_errors.py --search "<关键词>"
+python C:\Users\polestar\.claude\scripts\query_errors.py --type <error_type> --json  # Agent 消费
 ```
 
-错误库位置：`<config_dir>/comp-chem/error_db.json`（11 种 error_type，65+ 修复方案）
+错误库位置：`C:\Users\polestar\.claude\comp-chem\error_db.json`（11 种 error_type，65+ 修复方案）
 
 ### 工具注册表
 
-所有脚本的标准接口定义在 `<config_dir>/comp-chem/tool_registry.json`，Agent 可用 `grep "name"` 发现工具、用 `input_schema` 了解参数契约。
+所有脚本的标准接口定义在 `C:\Users\polestar\.claude\comp-chem\tool_registry.json`，Agent 可用 `grep "name"` 发现工具、用 `input_schema` 了解参数契约。
 组合模式（`composition_patterns`）定义了多工具编排流程（诊断/提交/监控）。
 
 ## 域 3：深层排查（在域 2 不够用时）
 
-→ **加载** `<config_dir>/comp-chem-sop.md`
+→ **加载** `C:\Users\polestar\.claude\comp-chem-sop.md`
 
 ## 不触发加载的话题
 
@@ -261,7 +278,7 @@ python <scripts_dir>/query_errors.py --type <error_type> --json  # Agent 消费
 复盘、深度分析、来龙去脉、为什么总是失败、根本上有没有问题、
 反思一下、梳理一下、问题出在哪、连败、反复失败、同一个坑
 
-→ **加载** `<config_dir>/deep-retrospect.md`
+→ **加载** `C:\Users\polestar\.claude\deep-retrospect.md`
 
 该文件包含通用复盘框架（CCRM、SAMULE 三层分析、AgentErrorTaxonomy、前提假设审查检查表、通用复盘报告模板）。
 各领域文件（comp-chem/hpc.md、comp-chem/diagnostics.md）包含该领域特有的补充检查项。

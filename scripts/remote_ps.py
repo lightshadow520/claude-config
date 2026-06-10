@@ -283,6 +283,10 @@ def connect_paramiko(host, port, user, password, key_file, timeout=30):
 
     try:
         client.connect(**kwargs)
+        # Keepalive: prevent AutoDL proxy gateway from dropping idle connections
+        transport = client.get_transport()
+        if transport:
+            transport.set_keepalive(30)
     except Exception as e:
         client.close()
         raise RuntimeError(f"SSH connect failed: {e}")
@@ -309,6 +313,8 @@ def connect_native_ssh(host, port, user, key_file, timeout=30):
         '-o', f'ConnectTimeout={timeout}',
         '-o', 'StrictHostKeyChecking=accept-new',
         '-o', 'BatchMode=yes',
+        '-o', 'ServerAliveInterval=30',
+        '-o', 'ServerAliveCountMax=3',
     ])
     dest = f"{user}@{host}" if user else host
     cmd.append(dest)

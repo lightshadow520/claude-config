@@ -20,16 +20,16 @@
 ## 本地文件
 
 ```
-python <scripts_dir>/check_calc.py <文件路径>              # 查进度
-python <scripts_dir>/check_calc.py <文件路径> --diagnose   # 报错场景
-python <scripts_dir>/check_calc.py <文件路径> --json       # 需要精确数据
+python C:\Users\polestar\.claude\scripts\check_calc.py <文件路径>              # 查进度
+python C:\Users\polestar\.claude\scripts\check_calc.py <文件路径> --diagnose   # 报错场景
+python C:\Users\polestar\.claude\scripts\check_calc.py <文件路径> --json       # 需要精确数据
 ```
 
 ## 远程服务器文件（强制四步，不可跳过）
 
 1. 用 paramiko/SSH 连服务器，找到输出文件路径
 2. 用 sftp/scp 下载输出文件到本地临时目录
-3. 跑 `python <scripts_dir>/check_calc.py <本地临时文件> --diagnose`
+3. 跑 `python C:\Users\polestar\.claude\scripts\check_calc.py <本地临时文件> --diagnose`
 4. 根据解析结果回复
 
 **严禁直接用 Read 读原始输出文件来回答上述问题。**
@@ -39,7 +39,7 @@ python <scripts_dir>/check_calc.py <文件路径> --json       # 需要精确数
 ## 排查流程
 
 脚本诊断置信度为 HIGH → 直接按修复建议执行。
-脚本诊断不明确 → 读 `<config_dir>/comp-chem-sop.md`，按 1→6 步排查：
+脚本诊断不明确 → 读 `C:\Users\polestar\.claude\comp-chem-sop.md`，按 1→6 步排查：
 原子坐标 → SCF 收敛 → 几何优化 → 资源/环境 → 输入文件 → 并行/环境
 
 ## 支持的代码
@@ -376,7 +376,7 @@ Smearing 铁律：0.005-0.01 Ha 可接受（熵贡献 ~1 meV/atom）
 
 ## 第三步：通用排错
 
-以上两步未解决时，读 `<config_dir>/comp-chem-sop.md` 的 1→6 步排查流程。
+以上两步未解决时，读 `C:\Users\polestar\.claude\comp-chem-sop.md` 的 1→6 步排查流程。
 
 ## 环境初始化（hpc_watcher.py 自动执行）
 
@@ -615,7 +615,7 @@ Success Capture 是"获利"——止损后找到的方案固化为永久资产�
 
 ## S7: Deep Retrospective（深度项目复盘）
 
-> **通用复盘框架已独立为** `<config_dir>/deep-retrospect.md`。
+> **通用复盘框架已独立为** `C:\Users\polestar\.claude\deep-retrospect.md`。
 > 包含：CCRM 原则、SAMULE 三层分析、AgentErrorTaxonomy 失败分类、通用检查表（A-E）、报告模板、复盘后铁律。
 > **首次触发 S7 时，先加载通用框架，再回来查看本节的领域特有补充。**
 

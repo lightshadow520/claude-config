@@ -51,6 +51,8 @@ def ssh_cmd(host, port, user=None, key_file=None, timeout=30):
         "-o", f"ConnectTimeout={timeout}",
         "-o", "StrictHostKeyChecking=accept-new",
         "-o", "BatchMode=yes",
+        "-o", "ServerAliveInterval=30",
+        "-o", "ServerAliveCountMax=3",
     ])
     dest = f"{user}@{host}" if user else host
     cmd.append(dest)
@@ -79,6 +81,8 @@ def scp_upload(local_path, remote_path, host, port, user=None, key_file=None, ti
         "-o", f"ConnectTimeout={timeout}",
         "-o", "StrictHostKeyChecking=accept-new",
         "-o", "BatchMode=yes",
+        "-o", "ServerAliveInterval=30",
+        "-o", "ServerAliveCountMax=3",
     ])
     cmd.extend([local_path, dest])
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout + 10)
@@ -97,6 +101,8 @@ def scp_download(remote_path, local_path, host, port, user=None, key_file=None, 
         "-o", f"ConnectTimeout={timeout}",
         "-o", "StrictHostKeyChecking=accept-new",
         "-o", "BatchMode=yes",
+        "-o", "ServerAliveInterval=30",
+        "-o", "ServerAliveCountMax=3",
     ])
     cmd.extend([src, local_path])
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout + 60)
